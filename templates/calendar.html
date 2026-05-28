@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>планиИруй! — Персональный Календарь Дедлайнов</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- Tippy.js styles for tooltips -->
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css" />
+
+    <style>
+        :root {
+            --bg-page: #FCFCFD;
+            --bg-panel: #FFFFFF;
+            --border-color: #E5E5E5;
+            --text-primary: #1A1A1A;
+            --text-secondary: #5F6368;
+            --yandex-red: #FC3F1D;
+            --yandex-red-hover: #E33516;
+            --event-bg: #E8F0FE;
+            --event-text: #185ABC;
+            --event-border-left: #1A73E8;
+            --transition-speed: 0.2s;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Yandex Sans Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-page);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding-bottom: 60px;
+        }
+
+        /* Clean White Panel */
+        .glass-panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.05), 0 1px 3px 1px rgba(60, 64, 67, 0.08);
+            padding: 24px;
+            margin-bottom: 20px;
+            position: relative;
+            transition: all var(--transition-speed) ease;
+        }
+
+        /* Typography */
+        h1, h2, h3, h4, .logo-text {
+            font-family: 'Yandex Sans Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-weight: 600;
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+        
+        .logo-text i {
+            color: var(--yandex-red);
+            font-size: 26px;
+        }
+
+        /* Navigation Buttons (Yandex Style) */
+        .nav-btn {
+            background: #FFFFFF;
+            border: 1px solid #DADCE0;
+            color: #3C4043;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all var(--transition-speed) ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-decoration: none;
+        }
+
+        .nav-btn:hover {
+            background: #F8F9FA;
+            border-color: #BDC1C6;
+            color: #1C1E21;
+        }
+
+        .nav-btn.active {
+            background: #E8F0FE;
+            border-color: #1A73E8;
+            color: #185ABC;
+            font-weight: 600;
+        }
+
+        /* Error States (Yandex warning style) */
+        .error-card {
+            max-width: 600px;
+            margin: 80px auto;
+            text-align: center;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            background: #FFF5F5;
+        }
+        .error-card h2 {
+            color: #D32F2F;
+        }
+
+        /* FullCalendar Yandex-Style Light Overrides */
+        .fc {
+            --fc-page-bg-color: #FFFFFF;
+            --fc-border-color: var(--border-color);
+            --fc-button-bg-color: #FFFFFF;
+            --fc-button-border-color: #DADCE0;
+            --fc-button-hover-bg-color: #F8F9FA;
+            --fc-button-hover-border-color: #BDC1C6;
+            --fc-button-active-bg-color: #E8F0FE;
+            --fc-button-active-border-color: #1A73E8;
+            --fc-event-bg-color: var(--event-bg);
+            --fc-event-border-color: rgba(26, 115, 232, 0.15);
+            --fc-event-text-color: var(--event-text);
+            --fc-today-bg-color: rgba(252, 63, 29, 0.02);
+            
+            font-family: 'Yandex Sans Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+        }
+
+        /* Calendar grid cell border overrides */
+        .fc-theme-standard td, .fc-theme-standard th {
+            border-color: #E5E5E5 !important;
+        }
+        
+        .fc .fc-col-header-cell-cushion {
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 8px 0;
+            font-size: 0.85rem;
+            text-transform: capitalize;
+            text-decoration: none;
+        }
+
+        /* Current Day Red circle badge */
+        .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+            background-color: var(--yandex-red) !important;
+            color: #FFFFFF !important;
+            border-radius: 50%;
+            width: 26px;
+            height: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            margin: 4px;
+            padding: 0 !important;
+        }
+        
+        /* Highlight today day-header */
+        .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion {
+            color: var(--yandex-red) !important;
+            font-weight: 700;
+        }
+
+        /* Yandex-style Now line indicator */
+        .fc-timegrid-now-indicator-line {
+            border-color: var(--yandex-red) !important;
+            border-top-width: 2px !important;
+        }
+        
+        /* Custom dot on the left side of Now indicator line */
+        .fc-timegrid-now-indicator-line::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: -4px;
+            width: 10px;
+            height: 10px;
+            background-color: var(--yandex-red);
+            border-radius: 50%;
+            z-index: 10;
+        }
+        
+        .fc-timegrid-now-indicator-arrow {
+            display: none !important; /* Hide default arrow icon */
+        }
+
+        /* Flat Event Cards (Minimalist Yandex Pastel Style) */
+        .fc-event {
+            background-color: var(--event-bg) !important;
+            border: 1px solid rgba(26, 115, 232, 0.15) !important;
+            border-left: 4px solid var(--event-border-left) !important;
+            border-radius: 6px !important;
+            padding: 4px 8px !important;
+            box-shadow: none !important;
+            font-weight: 500 !important;
+            cursor: pointer !important;
+            transition: background-color var(--transition-speed) ease, transform 0.1s ease !important;
+        }
+
+        .fc-event:hover {
+            background-color: #D2E3FC !important;
+            transform: translateY(-0.5px) !important;
+        }
+
+        .fc-event-title, .fc-event-time {
+            color: var(--event-text) !important;
+            font-weight: 600 !important;
+        }
+
+        /* Flat controls primary buttons */
+        .fc .fc-button-primary {
+            background-color: #FFFFFF;
+            border: 1px solid #DADCE0;
+            color: #3C4043;
+            font-weight: 500;
+            font-size: 0.9rem;
+            border-radius: 6px;
+            padding: 6px 12px;
+            transition: all var(--transition-speed) ease;
+            text-transform: capitalize;
+        }
+        
+        .fc .fc-button-primary:hover {
+            background-color: #F8F9FA;
+            border-color: #BDC1C6;
+            color: #1C1E21;
+        }
+
+        .fc .fc-button-primary:not(:disabled).fc-button-active,
+        .fc .fc-button-primary:not(:disabled):active {
+            background-color: #E8F0FE;
+            border-color: #1A73E8 !important;
+            color: #185ABC !important;
+            font-weight: 600;
+            box-shadow: none !important;
+        }
+        
+        /* More links */
+        .fc .fc-more-link {
+            color: var(--event-border-left);
+            font-weight: 600;
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .fc .fc-more-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Flat List View Overrides */
+        .fc-list-day-cushion {
+            background-color: #F8F9FA !important;
+            border-bottom: 1px solid var(--border-color) !important;
+        }
+        .fc-list-day-text, .fc-list-day-side-text {
+            font-weight: 600;
+            color: var(--text-primary) !important;
+        }
+        .fc-list-event:hover td {
+            background-color: #F8F9FA !important;
+        }
+
+        /* Yandex Light Tippy Tooltip Overrides */
+        .tippy-box[data-theme~='yandex-light'] {
+            background-color: #FFFFFF;
+            color: #1A1A1A;
+            border: 1px solid #E0E0E0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            font-family: 'Yandex Sans Text', sans-serif;
+            position: relative;
+        }
+        .tippy-box[data-theme~='yandex-light'] .tippy-arrow {
+            color: #FFFFFF;
+        }
+        
+        /* Green/blue glowing visual left-edge for tooltips */
+        .tippy-box[data-theme~='yandex-light']::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background-color: var(--event-border-left);
+            border-top-left-radius: 8px;
+            border-bottom-left-radius: 8px;
+        }
+
+        /* Floating Addition Button (Yandex Red Circle) */
+        .floating-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            background-color: var(--yandex-red);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(252, 63, 29, 0.3), 0 2px 4px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            transition: all var(--transition-speed) ease;
+        }
+        
+        .floating-btn:hover {
+            background-color: var(--yandex-red-hover);
+            transform: scale(1.08) translateY(-2px);
+            box-shadow: 0 6px 14px rgba(252, 63, 29, 0.4), 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Modal Overlay (Glassmorphism backdrop) */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            z-index: 1050;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn var(--transition-speed) ease-out;
+        }
+
+        /* Modal Card Design */
+        .modal-card {
+            background: #FFFFFF;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+            overflow: hidden;
+            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .modal-card-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-title {
+            margin: 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .modal-close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            transition: color var(--transition-speed) ease;
+        }
+
+        .modal-close-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-card-body {
+            padding: 24px;
+        }
+
+        .modal-card-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border-color);
+            background-color: #FCFCFD;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        /* Yandex-Style Inputs */
+        .yandex-input {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .yandex-input:focus {
+            outline: none;
+            border-color: var(--yandex-red);
+            box-shadow: 0 0 0 2px rgba(252, 63, 29, 0.1);
+        }
+
+        /* Standard Buttons */
+        .yandex-btn {
+            padding: 8px 18px;
+            font-weight: 500;
+            font-size: 0.95rem;
+            border-radius: 8px;
+            transition: all var(--transition-speed) ease;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .yandex-btn-primary {
+            background-color: var(--yandex-red);
+            border: 1px solid var(--yandex-red);
+            color: #FFFFFF;
+        }
+
+        .yandex-btn-primary:hover {
+            background-color: var(--yandex-red-hover);
+            border-color: var(--yandex-red-hover);
+        }
+
+        .yandex-btn-secondary {
+            background-color: #FFFFFF;
+            border: 1px solid #DADCE0;
+            color: #3C4043;
+        }
+
+        .yandex-btn-secondary:hover {
+            background-color: #F8F9FA;
+            border-color: #BDC1C6;
+            color: #1C1E21;
+        }
+
+        .yandex-btn-danger {
+            background-color: #FFF0F0;
+            border: 1px solid #FFC1C1;
+            color: #D93025;
+        }
+
+        .yandex-btn-danger:hover {
+            background-color: #FCE8E6;
+            border-color: #F28B82;
+            color: #A51D24;
+        }
+
+        /* Custom Toast Notification */
+        .yandex-toast {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #FFFFFF;
+            color: var(--text-primary);
+            border: 1px solid #E0E0E0;
+            border-left: 4px solid #34A853;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            border-radius: 8px;
+            padding: 12px 24px;
+            z-index: 2000;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 500;
+            animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes slideDown {
+            from { transform: translate(-50%, -20px); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container py-5">
+        
+        {% if error %}
+        <!-- 404 Error State panel -->
+        <div class="glass-panel error-card shadow-sm">
+            <div class="mb-3">
+                <i class="bi bi-exclamation-circle text-danger fs-1"></i>
+            </div>
+            <h2 class="mb-2">Доступ ограничен</h2>
+            <p class="text-secondary mb-4">{{ error }}</p>
+            <a href="https://t.me/planiruy_bot" class="nav-btn active">
+                <i class="bi bi-telegram"></i> Зарегистрироваться в Боте
+            </a>
+        </div>
+        {% else %}
+        
+        <!-- Header dashboard info -->
+        <div class="glass-panel d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-4">
+            <div>
+                <a href="/" class="logo-text mb-2">
+                    <i class="bi bi-calendar-check"></i> планиИруй!
+                </a>
+                <h2 class="h4 mb-1" style="font-weight: 500; font-size: 1.3rem;">Календарь дедлайнов</h2>
+                <p class="text-secondary mb-0">Студент: <strong>@{{ user.tg_id }}</strong></p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="/calendar/{{ user_tg_id }}" class="nav-btn active">
+                    <i class="bi bi-calendar-week"></i> 📅 Календарная сетка
+                </a>
+            </div>
+        </div>
+
+        <!-- Main FullCalendar Panel -->
+        <div class="glass-panel">
+            <div id="calendar"></div>
+        </div>
+
+        <!-- Floating Add Button -->
+        <button id="floating-add-btn" class="floating-btn" title="Добавить дедлайн">
+            <i class="bi bi-plus-lg"></i>
+        </button>
+
+        <!-- Modern Glassmorphic Event Creation Modal -->
+        <div id="event-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card">
+                <div class="modal-card-header">
+                    <h3 class="modal-title"><i class="bi bi-calendar-plus text-danger"></i> Добавить дедлайн</h3>
+                    <button type="button" class="modal-close-btn" id="modal-close-btn">&times;</button>
+                </div>
+                <form id="add-event-form">
+                    <div class="modal-card-body">
+                        <div id="modal-error-alert" class="alert alert-danger" style="display: none;"></div>
+                        <div class="mb-3">
+                            <label for="event-title" class="form-label">Название события <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control yandex-input w-100" id="event-title" required placeholder="Например, Сдача лабораторной по ИИ">
+                        </div>
+                        <div class="mb-3">
+                            <label for="event-description" class="form-label">Описание</label>
+                            <textarea class="form-control yandex-input w-100" id="event-description" rows="3" placeholder="Контекст, детали, место проведения..."></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="event-deadline" class="form-label">Дата и время (Дедлайн) <span class="text-danger">*</span></label>
+                            <input type="datetime-local" class="form-control yandex-input w-100" id="event-deadline" required>
+                        </div>
+                    </div>
+                    <div class="modal-card-footer">
+                        <button type="button" class="yandex-btn yandex-btn-secondary" id="modal-cancel-btn">Отмена</button>
+                        <button type="submit" class="yandex-btn yandex-btn-primary" id="modal-submit-btn">
+                            <span class="spinner-border spinner-border-sm me-2" id="submit-spinner" style="display: none;" role="status" aria-hidden="true"></span>
+                            <span id="submit-text">Сохранить</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Modern Glassmorphic Event Details & Action Modal -->
+        <div id="details-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card">
+                <div class="modal-card-header">
+                    <h3 class="modal-title"><i class="bi bi-info-circle text-danger"></i> Управление дедлайном</h3>
+                    <button type="button" class="modal-close-btn" id="details-close-btn">&times;</button>
+                </div>
+                <div class="modal-card-body">
+                    <div id="details-error-alert" class="alert alert-danger" style="display: none;"></div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-weight: 600; color: #555;">Задача</label>
+                        <h4 id="details-title" style="font-weight: bold; margin-top: 4px; color: #333;"></h4>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-weight: 600; color: #555;">Дата и время</label>
+                        <div id="details-deadline" style="font-size: 1.1rem; color: #333;"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-weight: 600; color: #555;">Описание</label>
+                        <div id="details-description" style="color: #666; font-style: italic; white-space: pre-wrap; background: rgba(0,0,0,0.03); padding: 8px 12px; border-radius: 6px;"></div>
+                    </div>
+                    <div class="mb-3 d-flex align-items-center">
+                        <label class="form-label mb-0 me-3" style="font-weight: 600; color: #555;">Статус:</label>
+                        <span id="details-status-badge" class="badge" style="font-size: 0.9rem; padding: 6px 12px; border-radius: 12px;"></span>
+                    </div>
+                </div>
+                <div class="modal-card-footer d-flex justify-content-between">
+                    <button type="button" class="yandex-btn yandex-btn-danger" id="details-delete-btn">
+                        <span class="spinner-border spinner-border-sm me-2" id="delete-spinner" style="display: none;" role="status" aria-hidden="true"></span>
+                        <i class="bi bi-trash"></i> Удалить
+                    </button>
+                    <div>
+                        <button type="button" class="yandex-btn yandex-btn-secondary" id="details-cancel-btn" style="margin-right: 8px;">Закрыть</button>
+                        <button type="button" class="yandex-btn yandex-btn-primary" id="details-complete-btn">
+                            <span class="spinner-border spinner-border-sm me-2" id="complete-spinner" style="display: none;" role="status" aria-hidden="true"></span>
+                            <span id="complete-btn-text">Выполнить</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Toast Notification -->
+        <div class="yandex-toast" id="yandex-toast" style="display: none;">
+            <i class="bi bi-check-circle-fill text-success fs-5"></i>
+            <span id="toast-message">Дедлайн успешно добавлен!</span>
+        </div>
+
+        {% endif %}
+    </div>
+
+    <!-- Popper.js and Tippy.js CDNs for beautiful tooltips -->
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    
+    <!-- FullCalendar 6.1.15 bundle CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+    
+    {% if not error %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const userTgId = "{{ user_tg_id }}";
+            const calendarEl = document.getElementById('calendar');
+
+            // Format date object to browser-local YYYY-MM-DDTHH:MM format for input[type="datetime-local"]
+            function formatLocalDateTime(date) {
+                const pad = (num) => String(num).padStart(2, '0');
+                const year = date.getFullYear();
+                const month = pad(date.getMonth() + 1);
+                const day = pad(date.getDate());
+                const hours = pad(date.getHours());
+                const minutes = pad(date.getMinutes());
+                return `${year}-${month}-${day}T${hours}:${minutes}`;
+            }
+
+            const calendar = new FullCalendar.Calendar(calendarEl, {
+                locale: 'ru',
+                initialView: 'timeGridWeek',
+                nowIndicator: true, // Enable current time red thread line
+                allDaySlot: false, // Hide all-day slots for a cleaner hour-by-hour view
+                defaultTimedEventDuration: '01:00:00', // Default duration is 1 hour
+                forceEventDuration: true, // Enforce duration for all events
+                selectable: true,
+                selectMirror: true,
+                headerToolbar: {
+                    left: 'prev,next today', // Navigation and Today buttons directly adjacent
+                    center: 'title',
+                    right: 'timeGridWeek,timeGridDay' // week, day views
+                },
+                buttonText: {
+                    today: 'Сегодня',
+                    week: 'Неделя',
+                    day: 'День'
+                },
+                firstDay: 1, // Start week on Monday
+                navLinks: true,
+                editable: false,
+                dayMaxEvents: true,
+                events: '/api/events/' + userTgId,
+                
+                // Clicking/selecting grid slots pre-fills deadline input and opens modal
+                select: function(info) {
+                    const startLocal = formatLocalDateTime(info.start);
+                    document.getElementById('event-deadline').value = startLocal;
+                    openModal();
+                    calendar.unselect(); // clear selection shading
+                },
+                
+                // Clicking on events triggers the actions and details modal
+                eventClick: function(info) {
+                    openDetailsModal(info.event);
+                },
+                
+                // Initialize tooltip popup on hover and visual checked decoration for completed events
+                eventDidMount: function(info) {
+                    if (info.event.extendedProps.is_completed) {
+                        info.el.style.textDecoration = 'line-through';
+                        info.el.style.opacity = '0.65';
+                        info.el.style.background = '#e2f9e5';
+                        info.el.style.borderColor = '#81c784';
+                        info.el.style.color = '#1b5e20';
+                        
+                        // Add checkmark emoji to title prefix
+                        const titleEl = info.el.querySelector('.fc-event-title');
+                        if (titleEl && !titleEl.textContent.startsWith('✓')) {
+                            titleEl.textContent = '✓ ' + titleEl.textContent;
+                        }
+                    }
+                    if (info.event.extendedProps.description) {
+                        tippy(info.el, {
+                            content: info.event.extendedProps.description,
+                            placement: 'top',
+                            arrow: true,
+                            theme: 'yandex-light',
+                            animation: 'scale'
+                        });
+                    }
+                }
+            });
+
+            calendar.render();
+
+            // Modal & Addition Form logic
+            const modal = document.getElementById('event-modal');
+            const closeBtn = document.getElementById('modal-close-btn');
+            const cancelBtn = document.getElementById('modal-cancel-btn');
+            const floatingAddBtn = document.getElementById('floating-add-btn');
+            const form = document.getElementById('add-event-form');
+            const errorAlert = document.getElementById('modal-error-alert');
+            const submitSpinner = document.getElementById('submit-spinner');
+            const submitText = document.getElementById('submit-text');
+            const submitBtn = document.getElementById('modal-submit-btn');
+
+            function openModal() {
+                errorAlert.style.display = 'none';
+                modal.style.display = 'flex';
+                document.getElementById('event-title').focus();
+            }
+
+            function closeModal() {
+                modal.style.display = 'none';
+                form.reset();
+            }
+
+            if (floatingAddBtn) {
+                floatingAddBtn.addEventListener('click', function() {
+                    const now = new Date();
+                    now.setHours(now.getHours() + 1, 0, 0, 0); // round to next hour
+                    document.getElementById('event-deadline').value = formatLocalDateTime(now);
+                    openModal();
+                });
+            }
+
+            if (closeBtn) closeBtn.addEventListener('click', closeModal);
+            if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+
+            // Close modal when clicking on the overlay background
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
+
+            // Form Submit (AJAX POST)
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const title = document.getElementById('event-title').value.trim();
+                const description = document.getElementById('event-description').value.trim();
+                const localDeadline = document.getElementById('event-deadline').value;
+                
+                if (!title || !localDeadline) {
+                    errorAlert.textContent = 'Пожалуйста, заполните все обязательные поля.';
+                    errorAlert.style.display = 'block';
+                    return;
+                }
+                
+                const deadlineDate = new Date(localDeadline);
+                const deadlineIso = deadlineDate.toISOString(); // Send as UTC ISO string
+                
+                // Show loading state
+                submitSpinner.style.display = 'inline-block';
+                submitText.textContent = 'Сохранение...';
+                submitBtn.disabled = true;
+                errorAlert.style.display = 'none';
+                
+                fetch('/api/events/' + userTgId, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        title: title,
+                        description: description || null,
+                        deadline: deadlineIso
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { throw new Error(err.detail || 'Не удалось сохранить событие'); });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    closeModal();
+                    calendar.refetchEvents(); // dynamically refetch calendar event data
+                    showToast('Дедлайн успешно добавлен в календарь и синхронизирован!');
+                })
+                .catch(err => {
+                    errorAlert.textContent = err.message;
+                    errorAlert.style.display = 'block';
+                })
+                .finally(() => {
+                    submitSpinner.style.display = 'none';
+                    submitText.textContent = 'Сохранить';
+                    submitBtn.disabled = false;
+                });
+            });
+
+            // Details Modal elements
+            const detailsModal = document.getElementById('details-modal');
+            const detailsCloseBtn = document.getElementById('details-close-btn');
+            const detailsCancelBtn = document.getElementById('details-cancel-btn');
+            const detailsDeleteBtn = document.getElementById('details-delete-btn');
+            const detailsCompleteBtn = document.getElementById('details-complete-btn');
+            
+            const detailsTitle = document.getElementById('details-title');
+            const detailsDeadline = document.getElementById('details-deadline');
+            const detailsDescription = document.getElementById('details-description');
+            const detailsStatusBadge = document.getElementById('details-status-badge');
+            const completeBtnText = document.getElementById('complete-btn-text');
+            const detailsErrorAlert = document.getElementById('details-error-alert');
+            
+            const deleteSpinner = document.getElementById('delete-spinner');
+            const completeSpinner = document.getElementById('complete-spinner');
+            
+            let activeClickedEvent = null; // store reference to active clicked event
+            
+            function openDetailsModal(event) {
+                activeClickedEvent = event;
+                detailsErrorAlert.style.display = 'none';
+                detailsErrorAlert.textContent = '';
+                
+                detailsTitle.textContent = event.title;
+                
+                // Format deadline display
+                const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+                const deadlineDate = new Date(event.start);
+                detailsDeadline.textContent = deadlineDate.toLocaleDateString('ru-RU', options);
+                
+                // Handle description
+                const desc = event.extendedProps.description || '';
+                if (desc) {
+                    detailsDescription.textContent = desc;
+                    detailsDescription.style.display = 'block';
+                } else {
+                    detailsDescription.style.display = 'none';
+                }
+                
+                // Handle status and buttons
+                const completed = event.extendedProps.is_completed;
+                if (completed) {
+                    detailsStatusBadge.textContent = 'Выполнено';
+                    detailsStatusBadge.className = 'badge bg-success text-white';
+                    detailsStatusBadge.style.backgroundColor = '#2E7D32';
+                    completeBtnText.textContent = 'Вернуть в работу';
+                } else {
+                    detailsStatusBadge.textContent = 'В процессе';
+                    detailsStatusBadge.className = 'badge bg-secondary text-white';
+                    detailsStatusBadge.style.backgroundColor = '#7B2CBF';
+                    completeBtnText.textContent = 'Выполнить';
+                }
+                
+                detailsModal.style.display = 'flex';
+            }
+            
+            function closeDetailsModal() {
+                if (detailsModal) detailsModal.style.display = 'none';
+                activeClickedEvent = null;
+            }
+            
+            if (detailsCloseBtn) detailsCloseBtn.addEventListener('click', closeDetailsModal);
+            if (detailsCancelBtn) detailsCancelBtn.addEventListener('click', closeDetailsModal);
+            
+            // Close details modal on overlay click
+            if (detailsModal) {
+                detailsModal.addEventListener('click', function(e) {
+                    if (e.target === detailsModal) {
+                        closeDetailsModal();
+                    }
+                });
+            }
+            
+            // Toggle Complete Action
+            if (detailsCompleteBtn) {
+                detailsCompleteBtn.addEventListener('click', function() {
+                    if (!activeClickedEvent) return;
+                    
+                    completeSpinner.style.display = 'inline-block';
+                    detailsCompleteBtn.disabled = true;
+                    detailsErrorAlert.style.display = 'none';
+                    
+                    fetch('/events/' + activeClickedEvent.id + '/toggle-complete', {
+                        method: 'POST'
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(err => { throw new Error(err.detail || 'Не удалось обновить статус'); });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        closeDetailsModal();
+                        calendar.refetchEvents();
+                        showToast(data.is_completed ? 'Задача отмечена как выполненная!' : 'Задача возвращена в работу!');
+                    })
+                    .catch(err => {
+                        detailsErrorAlert.textContent = err.message;
+                        detailsErrorAlert.style.display = 'block';
+                    })
+                    .finally(() => {
+                        completeSpinner.style.display = 'none';
+                        detailsCompleteBtn.disabled = false;
+                    });
+                });
+            }
+            
+            // Delete Event Action
+            if (detailsDeleteBtn) {
+                detailsDeleteBtn.addEventListener('click', function() {
+                    if (!activeClickedEvent) return;
+                    
+                    if (!confirm(`Вы действительно хотите удалить дедлайн "${activeClickedEvent.title}"?`)) {
+                        return;
+                    }
+                    
+                    deleteSpinner.style.display = 'inline-block';
+                    detailsDeleteBtn.disabled = true;
+                    detailsErrorAlert.style.display = 'none';
+                    
+                    fetch('/api/events/' + activeClickedEvent.id, {
+                        method: 'DELETE'
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(err => { throw new Error(err.detail || 'Не удалось удалить событие'); });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        closeDetailsModal();
+                        calendar.refetchEvents();
+                        showToast('Дедлайн успешно удален!');
+                    })
+                    .catch(err => {
+                        detailsErrorAlert.textContent = err.message;
+                        detailsErrorAlert.style.display = 'block';
+                    })
+                    .finally(() => {
+                        deleteSpinner.style.display = 'none';
+                        detailsDeleteBtn.disabled = false;
+                    });
+                });
+            }
+
+            // Toast helper
+            function showToast(message) {
+                const toast = document.getElementById('yandex-toast');
+                document.getElementById('toast-message').textContent = message;
+                toast.style.display = 'flex';
+                
+                setTimeout(() => {
+                    toast.style.display = 'none';
+                }, 4000);
+            }
+        });
+    </script>
+    {% endif %}
+
+</body>
+</html>

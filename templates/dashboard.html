@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>планиИруй! — Личный Дашборд Студента</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- DataTables Bootstrap 5 CSS -->
+    <link href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #09090e 0%, #120e2b 50%, #1e133d 100%);
+            --panel-bg: rgba(22, 19, 48, 0.55);
+            --panel-border: rgba(147, 51, 234, 0.15);
+            --panel-glow: rgba(147, 51, 234, 0.05);
+            --text-primary: #f3f1f8;
+            --text-secondary: #a39eb9;
+            --accent-purple: #9333ea;
+            --accent-violet: #a855f7;
+            --accent-pink: #d946ef;
+            --status-active: #c084fc;
+            --status-completed: #10b981;
+            --status-completed-bg: rgba(16, 185, 129, 0.12);
+            --status-active-bg: rgba(147, 51, 234, 0.15);
+            --transition-speed: 0.3s;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-gradient);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding-bottom: 60px;
+            overflow-x: hidden;
+            background-attachment: fixed;
+        }
+
+        /* Glassmorphic Container */
+        .glass-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            padding: 30px;
+            margin-bottom: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: all var(--transition-speed) ease;
+        }
+        
+        .glass-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-purple), var(--accent-pink));
+            opacity: 0.8;
+        }
+
+        /* Typography */
+        h1, h2, h3, h4, .logo-text {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+        }
+
+        .logo-text {
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .text-purple-glow {
+            color: #d946ef;
+            text-shadow: 0 0 12px rgba(217, 70, 239, 0.4);
+        }
+
+        /* Stats Cards */
+        .stat-card {
+            background: rgba(30, 27, 68, 0.45);
+            border: 1px solid rgba(147, 51, 234, 0.1);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            position: relative;
+            transition: transform var(--transition-speed) ease, border-color var(--transition-speed) ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(147, 51, 234, 0.3);
+            box-shadow: 0 12px 24px -10px rgba(147, 51, 234, 0.15);
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 800;
+            font-family: 'Outfit', sans-serif;
+            margin-top: 8px;
+            line-height: 1;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+            display: inline-block;
+        }
+
+        /* Search input styling */
+        .search-container {
+            position: relative;
+        }
+
+        .search-input {
+            background: rgba(15, 12, 38, 0.6) !important;
+            border: 1px solid var(--panel-border) !important;
+            color: var(--text-primary) !important;
+            border-radius: 12px !important;
+            padding: 12px 20px 12px 46px !important;
+            font-size: 15px;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .search-input:focus {
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.25) !important;
+            border-color: var(--accent-violet) !important;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            font-size: 18px;
+        }
+
+        /* Dashboard Table Styling */
+        .custom-table-container {
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .table {
+            margin-bottom: 0;
+            vertical-align: middle;
+        }
+
+        .table thead {
+            background: rgba(21, 16, 45, 0.8);
+        }
+
+        .table th {
+            color: var(--text-secondary);
+            font-family: 'Outfit', sans-serif;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            padding: 18px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .table td {
+            padding: 20px;
+            color: var(--text-primary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            background-color: transparent !important;
+        }
+
+        .table tbody tr {
+            transition: background-color var(--transition-speed) ease, opacity var(--transition-speed) ease;
+        }
+
+        .table tbody tr:hover {
+            background-color: rgba(147, 51, 234, 0.04) !important;
+        }
+
+        /* Table Row Completed State */
+        .table tbody tr.row-completed {
+            opacity: 0.65;
+        }
+
+        .table tbody tr.row-completed td.cell-title {
+            text-decoration: line-through;
+            color: var(--text-secondary);
+        }
+
+        /* Custom Toggle Switch */
+        .form-switch .form-check-input {
+            width: 3em;
+            height: 1.6em;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.15);
+            cursor: pointer;
+            transition: background-position .15s ease-in-out, background-color 0.25s ease-in-out;
+        }
+
+        .form-switch .form-check-input:focus {
+            border-color: var(--accent-violet);
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.4);
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%23a855f7'/%3e%3c/svg%3e");
+        }
+
+        .form-switch .form-check-input:checked {
+            background-color: var(--status-completed);
+            border-color: var(--status-completed);
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%23fff'/%3e%3c/svg%3e");
+        }
+
+        /* Status Badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 30px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .badge-active {
+            background-color: var(--status-active-bg);
+            color: var(--status-active);
+            border: 1px solid rgba(192, 132, 252, 0.25);
+        }
+
+        .badge-completed {
+            background-color: var(--status-completed-bg);
+            color: var(--status-completed);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+
+        /* Deadline Display */
+        .deadline-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .deadline-date {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .deadline-time {
+            font-size: 13px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Proximity Glowing Indicators */
+        .deadline-urgent {
+            color: #ef4444;
+            text-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+        }
+
+        .deadline-upcoming {
+            color: #f59e0b;
+        }
+
+        .urgent-glow-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #ef4444;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px #ef4444;
+            animation: pulse-urgent 1.5s infinite;
+        }
+
+        @keyframes pulse-urgent {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.2); opacity: 1; box-shadow: 0 0 12px #ef4444; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        /* User Header */
+        .user-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .btn-telegram-back {
+            background: linear-gradient(135deg, #229ED9 0%, #1e87bb 100%);
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 15px rgba(34, 158, 217, 0.3);
+            text-decoration: none;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .btn-telegram-back:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(34, 158, 217, 0.45);
+            color: white;
+        }
+
+        /* Error view */
+        .error-card {
+            text-align: center;
+            padding: 60px 40px;
+        }
+
+        .error-icon {
+            font-size: 64px;
+            color: #ef4444;
+            margin-bottom: 24px;
+            animation: bounce-error 2s infinite;
+        }
+
+        @keyframes bounce-error {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            color: var(--accent-purple);
+            margin-bottom: 16px;
+            opacity: 0.6;
+        }
+
+        /* DataTables Custom Styling to blend into Dark Purple Glassmorphism */
+        .dataTables_wrapper .dataTables_info {
+            color: var(--text-secondary) !important;
+            font-size: 13px;
+            margin-top: 20px;
+            font-weight: 400;
+        }
+
+        .dataTables_wrapper .dataTables_paginate {
+            margin-top: 20px;
+        }
+
+        .pagination {
+            gap: 6px;
+            margin-bottom: 0;
+        }
+
+        .pagination .page-item .page-link {
+            background-color: rgba(30, 27, 68, 0.45) !important;
+            border: 1px solid var(--panel-border) !important;
+            color: var(--text-secondary) !important;
+            border-radius: 8px !important;
+            padding: 8px 16px !important;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all var(--transition-speed) ease;
+        }
+
+        .pagination .page-item .page-link:hover {
+            background-color: var(--accent-purple) !important;
+            color: white !important;
+            border-color: var(--accent-violet) !important;
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+        }
+
+        .pagination .page-item.active .page-link {
+            background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%) !important;
+            border-color: transparent !important;
+            color: white !important;
+            box-shadow: 0 0 12px rgba(217, 70, 239, 0.4);
+        }
+
+        .pagination .page-item.disabled .page-link {
+            background-color: rgba(15, 12, 38, 0.3) !important;
+            border-color: rgba(255, 255, 255, 0.05) !important;
+            color: rgba(255, 255, 255, 0.15) !important;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container py-5">
+        
+        <!-- Header Panel -->
+        <div class="glass-panel">
+            <div class="user-meta">
+                <div>
+                    <div class="logo-text"><i class="bi bi-rocket-takeoff-fill"></i> планиИруй!</div>
+                    <p class="text-secondary mb-0 mt-2">Персональное расписание и дедлайны студента</p>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <span class="badge bg-dark border border-secondary text-secondary py-2 px-3 rounded-pill">
+                        <i class="bi bi-telegram text-info"></i> ID: {{ user_tg_id }}
+                    </span>
+                    <a href="https://t.me/" target="_blank" class="btn-telegram-back">
+                        <i class="bi bi-arrow-left-short"></i> В бота
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        {% if error %}
+        <!-- Error Block (User not found) -->
+        <div class="glass-panel error-card">
+            <div class="error-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
+            <h2 class="mb-3 text-white">Упс! Доступ ограничен</h2>
+            <p class="text-secondary mx-auto mb-4" style="max-width: 500px;">
+                {{ error }}
+            </p>
+            <p class="text-secondary mx-auto mb-4" style="max-width: 500px; font-size: 14px;">
+                Пожалуйста, зарегистрируйтесь через Telegram-бота <strong>@planiruy_bot</strong> перед использованием дашборда.
+            </p>
+            <a href="https://t.me/" class="btn btn-primary bg-purple border-0 rounded-pill py-3 px-5 fw-bold" style="background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%);">
+                Открыть Telegram
+            </a>
+        </div>
+        {% else %}
+
+        <!-- KPI Summary row -->
+        <div class="row mb-4">
+            <div class="col-md-4 mb-3 mb-md-0">
+                <div class="stat-card">
+                    <span class="stat-icon text-purple-glow"><i class="bi bi-journal-text"></i></span>
+                    <div class="stat-label">Всего дедлайнов</div>
+                    <div class="stat-value" id="stats-total">{{ events|length }}</div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-3 mb-md-0">
+                <div class="stat-card">
+                    <span class="stat-icon text-warning"><i class="bi bi-hourglass-split"></i></span>
+                    <div class="stat-label">Активные задачи</div>
+                    <div class="stat-value text-warning" id="stats-active">
+                        {% set active_count = namespace(value=0) %}
+                        {% for event in events %}
+                            {% if not event.is_completed %}
+                                {% set active_count.value = active_count.value + 1 %}
+                            {% endif %}
+                        {% endfor %}
+                        {{ active_count.value }}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="stat-card">
+                    <span class="stat-icon text-success"><i class="bi bi-check2-circle"></i></span>
+                    <div class="stat-label">Выполнено</div>
+                    <div class="stat-value text-success" id="stats-completed">
+                        {% set completed_count = namespace(value=0) %}
+                        {% for event in events %}
+                            {% if event.is_completed %}
+                                {% set completed_count.value = completed_count.value + 1 %}
+                            {% endif %}
+                        {% endfor %}
+                        {{ completed_count.value }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="glass-panel">
+            
+            <!-- Filter Actions Header -->
+            <div class="row align-items-center mb-4">
+                <div class="col-md-6 mb-3 mb-md-0">
+                    <h3 class="mb-0 text-white">Список подтвержденных задач</h3>
+                </div>
+                <div class="col-md-6">
+                    <div class="search-container">
+                        <i class="bi bi-search search-icon"></i>
+                        <input type="text" id="dashboard-search" class="form-control search-input" placeholder="Поиск по названию или описанию задачи...">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Table Block -->
+            {% if events|length == 0 %}
+            <div class="empty-state">
+                <div class="empty-icon"><i class="bi bi-folder-x"></i></div>
+                <h4 class="text-white mb-2">Здесь пока пусто</h4>
+                <p class="mb-0">У вас нет подтвержденных учебных мероприятий. Добавьте задачи через бота!</p>
+            </div>
+            {% else %}
+            <div class="custom-table-container">
+                <div class="table-responsive">
+                    <table class="table" id="deadlines-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 25%">📅 Срок / Дедлайн</th>
+                                <th style="width: 35%">📌 Задача</th>
+                                <th style="width: 25%">📝 Контекст / Аудитория</th>
+                                <th style="width: 15%; text-align: center;">🛠 Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for event in events %}
+                            <!-- Check proximity for color coding (within 24 hours urgent) -->
+                            <!-- Since we don't do complex server side dates inside Jinja, we pass it simple data attributes -->
+                            <!-- Python side date formatting -->
+                            {% set deadline_dt = event.deadline %}
+                            {% set date_str = deadline_dt.strftime('%d.%m.%Y') %}
+                            {% set time_str = deadline_dt.strftime('%H:%M') %}
+                            
+                            <tr id="event-row-{{ event.id }}" 
+                                class="{% if event.is_completed %}row-completed{% endif %}"
+                                data-search="{{ event.title.lower() }} {{ (event.description or '').lower() }}">
+                                
+                                <!-- Deadline Column -->
+                                <td>
+                                    <div class="deadline-container" data-timestamp="{{ event.deadline.isoformat() }}">
+                                        <div class="deadline-date" id="date-display-{{ event.id }}">
+                                            <i class="bi bi-calendar-event text-purple-glow"></i> {{ date_str }}
+                                        </div>
+                                        <div class="deadline-time">
+                                            <i class="bi bi-clock"></i> {{ time_str }}
+                                        </div>
+                                    </div>
+                                </td>
+                                
+                                <!-- Title Column -->
+                                <td class="cell-title fw-semibold text-white fs-6">
+                                    {{ event.title }}
+                                </td>
+                                
+                                <!-- Description Column -->
+                                <td class="text-secondary" style="font-size: 14px;">
+                                    {{ event.description or '—' }}
+                                </td>
+                                
+                                <!-- Status Toggle Button Column -->
+                                <td style="text-align: center;">
+                                    <div class="d-flex flex-column align-items-center gap-2 justify-content-center">
+                                        <span id="badge-{{ event.id }}" 
+                                              class="status-badge {% if event.is_completed %}badge-completed{% else %}badge-active{% endif %}">
+                                            {% if event.is_completed %}
+                                                ✅ Выполнено
+                                            {% else %}
+                                                ⏳ Активно
+                                            {% endif %}
+                                        </span>
+                                        <div class="form-check form-switch p-0 m-0">
+                                            <input class="form-check-input ms-0" 
+                                                   type="checkbox" 
+                                                   role="switch" 
+                                                   id="toggle-{{ event.id }}"
+                                                   onclick="toggleEventStatus({{ event.id }})"
+                                                   {% if event.is_completed %}checked{% endif %}>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+
+        </div>
+        {% endif %}
+
+    </div>
+
+    <!-- jQuery and DataTables JS -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- AJAX & Live Search Script -->
+    <script>
+        // High-performance DataTable initialization with customized localization
+        let table;
+        $(document).ready(function() {
+            table = $('#deadlines-table').DataTable({
+                dom: 'tpr', // Keep table ('t'), pagination ('p'), and info summary ('r')
+                ordering: false, // Maintain backend deadline-chronological sorting
+                pageLength: 10,
+                language: {
+                    info: "Показано с _START_ по _END_ из _TOTAL_ дедлайнов",
+                    infoEmpty: "Нет дедлайнов для отображения",
+                    infoFiltered: "(отфильтровано из _MAX_)",
+                    zeroRecords: "Совпадений не найдено",
+                    paginate: {
+                        previous: "‹",
+                        next: "›"
+                    }
+                }
+            });
+
+            // Connect our premium search input to DataTables search API
+            document.getElementById('dashboard-search')?.addEventListener('input', function(e) {
+                table.search(e.target.value).draw();
+            });
+        });
+
+        // AJAX Toggle Event Status Function
+        async function toggleEventStatus(eventId) {
+            const checkbox = document.getElementById(`toggle-${eventId}`);
+            const badge = document.getElementById(`badge-${eventId}`);
+            const row = document.getElementById(`event-row-${eventId}`);
+            
+            // Temporary disable to prevent double clicks during network roundtrip
+            checkbox.disabled = true;
+            
+            try {
+                const response = await fetch(`/events/${eventId}/toggle-complete`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Network error during event toggle');
+                }
+                
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    const isCompleted = result.is_completed;
+                    
+                    // 1. Update UI Elements
+                    if (isCompleted) {
+                        row.classList.add('row-completed');
+                        badge.className = 'status-badge badge-completed';
+                        badge.innerHTML = '✅ Выполнено';
+                        checkbox.checked = true;
+                    } else {
+                        row.classList.remove('row-completed');
+                        badge.className = 'status-badge badge-active';
+                        badge.innerHTML = '⏳ Активно';
+                        checkbox.checked = false;
+                    }
+                    
+                    // 2. Recalculate KPI Stats Counters in Real-Time
+                    recalculateStats();
+                } else {
+                    // Revert switch state on logic failure
+                    checkbox.checked = !checkbox.checked;
+                    alert('Ошибка при обновлении статуса задачи. Попробуйте еще раз.');
+                }
+            } catch (err) {
+                console.error(err);
+                // Revert switch state on network failure
+                checkbox.checked = !checkbox.checked;
+                alert('Не удалось связаться с сервером. Проверьте интернет-соединение.');
+            } finally {
+                // Re-enable interactive switch
+                checkbox.disabled = false;
+            }
+        }
+
+        // Real-Time Stats Recalculation inside Browser DOM
+        function recalculateStats() {
+            const totalRows = document.querySelectorAll('#deadlines-table tbody tr').length;
+            const completedRows = document.querySelectorAll('#deadlines-table tbody tr.row-completed').length;
+            const activeRows = totalRows - completedRows;
+            
+            const totalCounter = document.getElementById('stats-total');
+            const activeCounter = document.getElementById('stats-active');
+            const completedCounter = document.getElementById('stats-completed');
+            
+            if (totalCounter) totalCounter.textContent = totalRows;
+            if (activeCounter) activeCounter.textContent = activeRows;
+            if (completedCounter) completedCounter.textContent = completedRows;
+        }
+
+        // Proximity Highlight Calculations on Page Load
+        document.addEventListener('DOMContentLoaded', () => {
+            const rows = document.querySelectorAll('#deadlines-table tbody tr');
+            const now = new Date();
+            
+            rows.forEach(row => {
+                const deadlineCell = row.querySelector('.deadline-container');
+                if (!deadlineCell) return;
+                
+                const deadlineIso = deadlineCell.getAttribute('data-timestamp');
+                if (!deadlineIso) return;
+                
+                const deadlineDate = new Date(deadlineIso);
+                const diffMs = deadlineDate - now;
+                const diffHours = diffMs / (1000 * 60 * 60);
+                
+                const dateDisplay = row.querySelector('.deadline-date');
+                
+                if (diffMs > 0 && diffHours <= 24) {
+                    // Urgent task (< 24 hours left): glow red and append pulse dot
+                    dateDisplay.classList.add('deadline-urgent');
+                    
+                    // Avoid duplicating dots
+                    if (!dateDisplay.querySelector('.urgent-glow-dot')) {
+                        const pulseDot = document.createElement('span');
+                        pulseDot.className = 'urgent-glow-dot ms-2';
+                        dateDisplay.appendChild(pulseDot);
+                    }
+                } else if (diffMs > 0 && diffHours <= 72) {
+                    // Upcoming task (24 to 72 hours left): color orange
+                    dateDisplay.classList.add('deadline-upcoming');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
