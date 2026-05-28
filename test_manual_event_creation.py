@@ -7,14 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from main import app
 from models import Event, User, EventStatus, Reminder, ReminderStatus
 from database import get_db
+from dashboard_router import sign_tg_id, get_cookie_secret
+
 
 @pytest.mark.anyio
 async def test_create_event_manually_success():
     """
-    Tests that POST /api/events/{user_tg_id} manually creates a confirmed event,
+    Tests that POST /api/events manually creates a confirmed event,
     calculates future pre-emptive reminders, and returns a 200 JSON success response.
+    Requires a signed session cookie.
     """
     client = TestClient(app)
+    
+    # Inject signed session cookie
+    signed_cookie = sign_tg_id(12345, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
     
     mock_user = User(id=1, tg_id=12345, timezone="Europe/Moscow")
     
@@ -55,7 +62,7 @@ async def test_create_event_manually_success():
         }
         
         try:
-            response = client.post("/api/events/12345", json=payload)
+            response = client.post("/api/events", json=payload)
             
             assert response.status_code == 200
             data = response.json()
@@ -79,10 +86,15 @@ async def test_create_event_manually_success():
 @pytest.mark.anyio
 async def test_create_event_manually_filters_past_reminders():
     """
-    Tests that POST /api/events/{user_tg_id} filters out past reminders.
+    Tests that POST /api/events filters out past reminders.
     If the deadline is in 2 hours, only 3 reminders (1h, 30m, 15m before deadline) are in the future.
     """
     client = TestClient(app)
+    
+    # Inject signed session cookie
+    signed_cookie = sign_tg_id(12345, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
+    
     mock_user = User(id=1, tg_id=12345, timezone="Europe/Moscow")
     
     # Deadline in 2 hours (120 minutes)
@@ -120,7 +132,7 @@ async def test_create_event_manually_filters_past_reminders():
         }
         
         try:
-            response = client.post("/api/events/12345", json=payload)
+            response = client.post("/api/events", json=payload)
             assert response.status_code == 200
             
             # Since the deadline is in 2 hours (<24h), it schedules an immediate reminder (1),
@@ -133,10 +145,15 @@ async def test_create_event_manually_filters_past_reminders():
 @pytest.mark.anyio
 async def test_create_event_manually_under_24_hours_creates_immediate_reminder():
     """
-    Tests that POST /api/events/{user_tg_id} registers an immediate reminder
+    Tests that POST /api/events registers an immediate reminder
     if the event's deadline is scheduled in under 24 hours (e.g., 23 hours).
     """
     client = TestClient(app)
+    
+    # Inject signed session cookie
+    signed_cookie = sign_tg_id(12345, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
+    
     mock_user = User(id=1, tg_id=12345, timezone="Europe/Moscow")
     
     # Deadline in 23 hours
@@ -172,7 +189,7 @@ async def test_create_event_manually_under_24_hours_creates_immediate_reminder()
         }
         
         try:
-            response = client.post("/api/events/12345", json=payload)
+            response = client.post("/api/events", json=payload)
             assert response.status_code == 200
             
             # 23 hours is < 24 hours, so:
@@ -187,10 +204,14 @@ async def test_create_event_manually_under_24_hours_creates_immediate_reminder()
 @pytest.mark.anyio
 async def test_create_event_manually_user_not_found():
     """
-    Tests that POST /api/events/{user_tg_id} returns a 404 error
-    if the student is not found in the system.
+    Tests that POST /api/events returns a 404 error
+    if the student is authorized but not found in the system database.
     """
     client = TestClient(app)
+    
+    # Inject signed session cookie for 99999
+    signed_cookie = sign_tg_id(99999, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
     
     mock_session = MagicMock(spec=AsyncSession)
     mock_user_result = MagicMock()
@@ -208,7 +229,7 @@ async def test_create_event_manually_user_not_found():
     }
     
     try:
-        response = client.post("/api/events/99999", json=payload)
+        response = client.post("/api/events", json=payload)
         assert response.status_code == 404
         assert "не найден" in response.json()["detail"]
     finally:
@@ -218,10 +239,15 @@ async def test_create_event_manually_user_not_found():
 @pytest.mark.anyio
 async def test_create_event_manually_conflict():
     """
-    Tests that POST /api/events/{user_tg_id} returns a 400 Bad Request
+    Tests that POST /api/events returns a 400 Bad Request
     if there's an already confirmed event overlapping within 1 hour.
     """
     client = TestClient(app)
+    
+    # Inject signed session cookie
+    signed_cookie = sign_tg_id(12345, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
+    
     mock_user = User(id=1, tg_id=12345, timezone="Europe/Moscow")
     
     deadline = datetime.now(timezone.utc) + timedelta(days=1)
@@ -254,7 +280,7 @@ async def test_create_event_manually_conflict():
         }
         
         try:
-            response = client.post("/api/events/12345", json=payload)
+            response = client.post("/api/events", json=payload)
             assert response.status_code == 400
             data = response.json()
             assert "пересекается с уже забронированной задачей" in data["detail"]
@@ -352,5 +378,3 @@ async def test_toggle_event_complete_success():
         mock_session.commit.assert_called_once()
     finally:
         app.dependency_overrides.clear()
-
-

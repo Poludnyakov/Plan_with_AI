@@ -292,7 +292,7 @@ async def test_cmd_list():
         
         # Verify text containing HTML link
         assert "Ваша персональная таблица дедлайнов готова!" in args[0]
-        assert "http://localhost:8000/dashboard/999222111" in args[0]
+        assert "http://localhost:8000/dashboard" in args[0]
         assert "<a href=" in args[0]
         
         # Verify message parameters
@@ -318,7 +318,7 @@ async def test_cmd_calendar():
         
         # Verify text containing styled links
         assert "календарь готов" in args[0]
-        assert "http://localhost:8000/calendar/999222111" in args[0]
+        assert "http://localhost:8000/calendar" in args[0]
         
         # Verify message parameters
         assert kwargs.get("parse_mode") == "Markdown"

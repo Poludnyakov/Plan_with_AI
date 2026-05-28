@@ -28,7 +28,7 @@ class CalendarApp(QMainWindow):
 
     def load_calendar(self):
         """Loads the visual calendar endpoint from the secure production server."""
-        url_str = f"https://planwithai.ru/calendar/{self.user_tg_id}"
+        url_str = "https://planwithai.ru/calendar"
         self.web_view.setUrl(QUrl(url_str))
 
     def on_load_finished(self, ok: bool):

@@ -80,7 +80,7 @@ def test_calendar_app_load_url():
         
         # Check QUrl creation (our MockQUrl)
         assert isinstance(args[0], MockQUrl)
-        assert args[0].url_str == "https://planwithai.ru/calendar/456"
+        assert args[0].url_str == "https://planwithai.ru/calendar"
 
 
 def test_calendar_app_offline_handling():

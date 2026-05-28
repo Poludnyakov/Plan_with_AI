@@ -530,7 +530,7 @@
                 <p class="text-secondary mb-0">Студент: <strong>@{{ user.tg_id }}</strong></p>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <a href="/calendar/{{ user_tg_id }}" class="nav-btn active">
+                <a href="/calendar" class="nav-btn active">
                     <i class="bi bi-calendar-week"></i> 📅 Календарная сетка
                 </a>
             </div>
@@ -678,7 +678,7 @@
                 navLinks: true,
                 editable: false,
                 dayMaxEvents: true,
-                events: '/api/events/' + userTgId,
+                events: '/api/events',
                 
                 // Clicking/selecting grid slots pre-fills deadline input and opens modal
                 select: function(info) {
@@ -786,7 +786,7 @@
                 submitBtn.disabled = true;
                 errorAlert.style.display = 'none';
                 
-                fetch('/api/events/' + userTgId, {
+                fetch('/api/events', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'

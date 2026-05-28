@@ -54,8 +54,8 @@ async def cmd_start(message: Message, db_session: AsyncSession):
     # Also send the links as a follow-up with direct, bulletproof Markdown links inside
     await message.answer(
         f"🔗 Ссылки быстрого доступа к твоему расписанию:\n\n"
-        f"📅 [Открыть Календарь]({settings.APP_URL}/calendar/{tg_id})\n"
-        f"📊 [Открыть Список дедлайнов]({settings.APP_URL}/dashboard/{tg_id})",
+        f"📅 [Открыть Календарь]({settings.APP_URL}/calendar)\n"
+        f"📊 [Открыть Список дедлайнов]({settings.APP_URL}/dashboard)",
         parse_mode="Markdown",
         disable_web_page_preview=True
     )
@@ -68,10 +68,9 @@ async def cmd_calendar(message: Message):
     Handles the /calendar command or persistent button clicks.
     Sends direct, bulletproof Markdown links to launch the student's personal calendar grid.
     """
-    tg_id = message.from_user.id
     text = (
         "📅 *Ваш персональный интерактивный календарь готов!*\n\n"
-        f"🔗 [Нажмите сюда, чтобы открыть Календарь]({settings.APP_URL}/calendar/{tg_id})\n\n"
+        f"🔗 [Нажмите сюда, чтобы открыть Календарь]({settings.APP_URL}/calendar)\n\n"
         "Вы можете кликать по сетке часов, чтобы мгновенно добавлять новые дедлайны вручную с автоматической рассылкой напоминаний!"
     )
     await message.answer(
@@ -87,8 +86,7 @@ async def cmd_list(message: Message):
     Handles the /list command.
     Sends a beautiful message with a clickable link to open the student's personal dashboard.
     """
-    user_id = message.from_user.id
-    url = f"{settings.APP_URL}/dashboard/{user_id}"
+    url = f"{settings.APP_URL}/dashboard"
     
     text = (
         "📅 <b>Ваша персональная таблица дедлайнов готова!</b>\n\n"

@@ -7,14 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from main import app
 from models import Event, User, EventStatus
 from database import get_db
+from dashboard_router import sign_tg_id, get_cookie_secret
 
 
 def test_get_dashboard_success():
     """
-    Tests that GET /dashboard/{user_tg_id} returns a 200 HTML response
+    Tests that GET /dashboard with a signed session cookie returns a 200 HTML response
     displaying the student's confirmed schedule tasks.
     """
     client = TestClient(app)
+    
+    # Sign cookie and set it in client
+    signed_cookie = sign_tg_id(12345, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
     
     mock_user = User(
         id=1,
@@ -61,7 +66,7 @@ def test_get_dashboard_success():
     app.dependency_overrides[get_db] = override_get_db
     
     try:
-        response = client.get("/dashboard/12345")
+        response = client.get("/dashboard")
         
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
@@ -77,12 +82,26 @@ def test_get_dashboard_success():
         app.dependency_overrides.clear()
 
 
-def test_get_dashboard_user_not_found():
+def test_get_dashboard_unauthorized_redirect():
     """
-    Tests that GET /dashboard/{user_tg_id} renders the template with a 404 status
-    code and an informative error message if the student is not registered.
+    Tests that GET /dashboard without a session cookie redirects (HTTP 303) to /login.
     """
     client = TestClient(app)
+    
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 303
+    assert "/login" in response.headers["location"]
+
+
+def test_get_dashboard_user_not_found():
+    """
+    Tests that GET /dashboard redirects to /login if the student is not registered in the system.
+    """
+    client = TestClient(app)
+    
+    # Sign cookie with valid signature but non-existent ID
+    signed_cookie = sign_tg_id(99999, get_cookie_secret())
+    client.cookies.set("planiruy_session", signed_cookie)
     
     mock_session = MagicMock(spec=AsyncSession)
     mock_user_result = MagicMock()
@@ -95,11 +114,9 @@ def test_get_dashboard_user_not_found():
     app.dependency_overrides[get_db] = override_get_db
     
     try:
-        response = client.get("/dashboard/99999")
-        
-        assert response.status_code == 404
-        assert "Студент с Telegram ID 99999 не зарегистрирован в системе" in response.text
-        assert "Доступ ограничен" in response.text
+        response = client.get("/dashboard", follow_redirects=False)
+        assert response.status_code == 303
+        assert "/login" in response.headers["location"]
     finally:
         app.dependency_overrides.clear()
 
@@ -125,6 +142,7 @@ def test_toggle_event_complete_success():
     mock_event_result = MagicMock()
     mock_event_result.scalar_one_or_none.return_value = mock_event
     mock_session.execute = AsyncMock(return_value=mock_event_result)
+    mock_session.commit = MagicMock()  # AsyncMock not required for standard mock commits depending on test framework setup
     mock_session.commit = AsyncMock()
     mock_session.refresh = AsyncMock()
     
