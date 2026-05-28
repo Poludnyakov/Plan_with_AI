@@ -31,9 +31,10 @@ class Settings:
         self.YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL") or "https://llm.api.cloud.yandex.net/v1"
         self.YANDEX_CLOUD_MODEL = os.getenv("YANDEX_CLOUD_MODEL") or "qwen3.6-35b-a3b/latest"
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
+        self.APP_URL = os.getenv("APP_URL") or "http://localhost:8000"
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
         self.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-        self.GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI") or "http://localhost:8000/google/callback"
+        self.GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI") or f"{self.APP_URL}/google/callback"
         self.GOOGLE_SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID")
         self.YANDEX_EMAIL = os.getenv("YANDEX_EMAIL")
         self.YANDEX_APP_PASSWORD = os.getenv("YANDEX_APP_PASSWORD")

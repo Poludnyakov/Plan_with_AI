@@ -27,8 +27,8 @@ class CalendarApp(QMainWindow):
         self.load_calendar()
 
     def load_calendar(self):
-        """Loads the visual calendar endpoint from the local FastAPI server."""
-        url_str = f"http://localhost:8000/calendar/{self.user_tg_id}"
+        """Loads the visual calendar endpoint from the secure production server."""
+        url_str = f"https://planwithai.ru/calendar/{self.user_tg_id}"
         self.web_view.setUrl(QUrl(url_str))
 
     def on_load_finished(self, ok: bool):
@@ -100,15 +100,15 @@ class CalendarApp(QMainWindow):
                 <div class="container">
                     <div style="font-size: 55px; margin-bottom: 20px;">⚠️</div>
                     <h1>Ошибка подключения</h1>
-                    <p>Пожалуйста, запустите FastAPI бэкенд (uvicorn), чтобы открыть календарь дедлайнов.<br>
-                    Не удалось подключиться к локальному серверу по адресу:<br>
-                    <b style="color: #c084fc;">http://localhost:8000</b></p>
+                    <p>Пожалуйста, проверьте подключение к интернету или статус сервера.<br>
+                    Не удалось подключиться к защищенному серверу по адресу:<br>
+                    <b style="color: #c084fc;">https://planwithai.ru</b></p>
                     <button class="btn" onclick="window.location.reload();">🔄 Повторить попытку</button>
                 </div>
             </body>
             </html>
             """
-            self.web_view.setHtml(error_html, QUrl("http://localhost:8000/"))
+            self.web_view.setHtml(error_html, QUrl("https://planwithai.ru/"))
 
 if __name__ == "__main__":
     # Default fallback Telegram ID for testing

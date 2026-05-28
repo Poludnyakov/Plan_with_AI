@@ -80,7 +80,7 @@ def test_calendar_app_load_url():
         
         # Check QUrl creation (our MockQUrl)
         assert isinstance(args[0], MockQUrl)
-        assert args[0].url_str == "http://localhost:8000/calendar/456"
+        assert args[0].url_str == "https://planwithai.ru/calendar/456"
 
 
 def test_calendar_app_offline_handling():
@@ -108,5 +108,5 @@ def test_calendar_app_offline_handling():
         args, kwargs = app.web_view.setHtml.call_args
         html_content = args[0]
         assert "Ошибка подключения" in html_content
-        assert "Пожалуйста, запустите FastAPI бэкенд (uvicorn)" in html_content
-        assert "http://localhost:8000" in html_content
+        assert "Пожалуйста, проверьте подключение к интернету или статус сервера." in html_content
+        assert "https://planwithai.ru" in html_content
