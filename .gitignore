@@ -1,0 +1,29 @@
+# Environments and Secrets
+.env
+.env.production
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite
+
+# Desktop / PyQt6 (since it's a server build ignore build outputs)
+build/
+dist/
+*.spec
+
+# OS and Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
