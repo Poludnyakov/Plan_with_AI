@@ -23,4 +23,6 @@ pytz==2026.2
 PyYAML==6.0.3
 recurring-ical-events==3.8.2
 SQLAlchemy==2.0.50
+setuptools<81
+vobject==0.9.9
 uvicorn==0.48.0

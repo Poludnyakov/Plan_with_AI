@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>планиИруй! — Расписание</title>
+    <style>
+        :root {
+            --bg: var(--tg-theme-bg-color, #f6f7f9);
+            --surface: var(--tg-theme-secondary-bg-color, #fff);
+            --text: var(--tg-theme-text-color, #202124);
+            --muted: var(--tg-theme-hint-color, #72767d);
+            --primary: var(--tg-theme-button-color, #2563eb);
+            --primary-text: var(--tg-theme-button-text-color, #fff);
+            --line: rgba(95, 99, 104, .17);
+            --danger: var(--tg-theme-destructive-text-color, #c5221f);
+            --hour-height: 56px;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: var(--bg); color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            overflow: hidden; -webkit-font-smoothing: antialiased;
+        }
+        button, input, textarea { font: inherit; }
+        button { -webkit-tap-highlight-color: transparent; }
+        .app { height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+        .topbar {
+            min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            padding: 8px max(14px, env(safe-area-inset-left)); background: var(--surface);
+            border-bottom: 1px solid var(--line);
+        }
+        .brand { min-width: 0; }
+        .brand strong { display: block; font-size: 17px; letter-spacing: -.02em; }
+        .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; text-transform: capitalize; }
+        .top-actions { display: flex; align-items: center; gap: 4px; }
+        .top-button {
+            height: 40px; min-width: 40px; padding: 0 11px; border: 0; border-radius: 11px;
+            background: transparent; color: var(--text); font-weight: 650; cursor: pointer;
+        }
+        .top-button.arrow { padding: 0; font-size: 24px; }
+        .top-button:active { background: var(--line); }
+        .week-strip {
+            display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px;
+            padding: 7px 8px 9px; background: var(--surface); border-bottom: 1px solid var(--line);
+        }
+        .week-day {
+            min-width: 0; height: 54px; border: 0; border-radius: 13px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+            background: transparent; color: var(--text); cursor: pointer;
+        }
+        .week-day-name { color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+        .week-day-number { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 50%; font-size: 13px; font-weight: 680; }
+        .week-day.today .week-day-number { color: var(--primary); }
+        .week-day.selected .week-day-number { background: var(--primary); color: var(--primary-text); }
+        .week-day.has-events::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--primary); }
+
+        .content { min-height: 0; position: relative; }
+        .timeline-scroll, .agenda-scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); }
+        .timeline { position: relative; height: calc(var(--hour-height) * 24); min-height: calc(var(--hour-height) * 24); }
+        .hour-row {
+            position: absolute; left: 0; right: 0; height: var(--hour-height);
+            border-top: 1px solid var(--line); pointer-events: none;
+        }
+        .hour-label {
+            position: absolute; left: 8px; top: -8px; width: 39px; padding-right: 5px;
+            background: var(--surface); color: var(--muted); font-size: 10px; text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .events-layer { position: absolute; left: 54px; right: 8px; top: 0; height: 100%; }
+        .timeline-event {
+            position: absolute; min-height: 32px; padding: 6px 8px; overflow: hidden;
+            border: 0; border-left: 4px solid #1a73e8; border-radius: 8px;
+            background: #dbeafe; color: #123b75; text-align: left; cursor: pointer;
+        }
+        .timeline-event:active { filter: brightness(.96); }
+        .timeline-event.done { border-left-color: #188038; background: #e6f4ea; color: #0d652d; opacity: .72; }
+        .timeline-event-title { display: block; font-size: 12px; font-weight: 750; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .timeline-event-time { display: block; margin-top: 2px; font-size: 10px; font-variant-numeric: tabular-nums; }
+        .now-line { position: absolute; left: 46px; right: 0; height: 2px; background: #ea4335; z-index: 3; pointer-events: none; }
+        .now-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: #ea4335; }
+        .empty-day {
+            position: sticky; top: 18px; z-index: 2; width: max-content; max-width: calc(100% - 80px);
+            margin: 18px 16px 0 auto; padding: 9px 12px; border: 1px solid var(--line);
+            border-radius: 11px; background: var(--surface); color: var(--muted); font-size: 12px;
+        }
+
+        .agenda-scroll { padding: 8px 12px 90px; }
+        .agenda-date { margin: 14px 4px 6px; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+        .agenda-event {
+            width: 100%; display: grid; grid-template-columns: 78px 4px minmax(0, 1fr); gap: 10px;
+            padding: 12px 8px; border: 0; border-radius: 12px; background: transparent; color: var(--text); text-align: left;
+        }
+        .agenda-event:active { background: var(--line); }
+        .agenda-time { color: var(--muted); font-size: 12px; line-height: 1.35; font-variant-numeric: tabular-nums; }
+        .agenda-mark { border-radius: 99px; background: var(--primary); }
+        .agenda-event.done .agenda-mark { background: #188038; }
+        .agenda-title { font-size: 14px; font-weight: 720; }
+        .agenda-description { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+        .agenda-event.done .agenda-title { text-decoration: line-through; opacity: .65; }
+
+        .bottom-nav {
+            min-height: calc(62px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+            display: grid; grid-template-columns: 1fr 1fr; background: var(--surface); border-top: 1px solid var(--line);
+        }
+        .nav-button { border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; }
+        .nav-button span { display: block; font-size: 20px; line-height: 22px; }
+        .nav-button.active { color: var(--primary); }
+        .fab {
+            position: fixed; z-index: 20; right: max(17px, env(safe-area-inset-right));
+            bottom: calc(74px + env(safe-area-inset-bottom)); width: 54px; height: 54px;
+            border: 0; border-radius: 17px; background: var(--primary); color: var(--primary-text);
+            box-shadow: 0 8px 24px rgba(37, 99, 235, .32); font-size: 29px;
+        }
+
+        .backdrop { position: fixed; inset: 0; z-index: 50; display: none; align-items: flex-end; background: rgba(0,0,0,.35); }
+        .backdrop.open { display: flex; }
+        .sheet {
+            width: 100%; max-height: 90vh; overflow-y: auto; padding: 10px 18px calc(18px + env(safe-area-inset-bottom));
+            border-radius: 22px 22px 0 0; background: #fff; color: #202124;
+        }
+        .handle { width: 36px; height: 4px; margin: 0 auto 12px; border-radius: 99px; background: #d0d3d7; }
+        .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .sheet-head h2 { margin: 0; font-size: 20px; }
+        .close { width: 40px; height: 40px; border: 0; border-radius: 50%; background: #f1f3f4; font-size: 22px; }
+        .field { margin-top: 15px; }
+        .field label { display: block; margin-bottom: 6px; color: #5f6368; font-size: 12px; font-weight: 700; }
+        .field input, .field textarea {
+            width: 100%; min-height: 47px; padding: 11px 12px; border: 1px solid #dadce0;
+            border-radius: 11px; background: #fff; color: #202124; outline: 0;
+        }
+        .field textarea { min-height: 80px; resize: vertical; }
+        .field input:focus, .field textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+        .actions { display: flex; gap: 9px; margin-top: 20px; }
+        .action { min-height: 47px; padding: 0 15px; border: 0; border-radius: 12px; font-weight: 750; }
+        .action.primary { flex: 1; background: #2563eb; color: #fff; }
+        .action.secondary { background: #f1f3f4; color: #3c4043; }
+        .action.danger { background: #fce8e6; color: #b3261e; }
+        .action:disabled { opacity: .55; }
+        .details-time { margin-top: 8px; color: #5f6368; line-height: 1.4; }
+        .details-description { margin-top: 15px; line-height: 1.45; white-space: pre-wrap; }
+        .error { display: none; margin: 12px 0 0; color: #b3261e; font-size: 13px; }
+        .toast {
+            position: fixed; z-index: 80; left: 50%; bottom: calc(72px + env(safe-area-inset-bottom));
+            max-width: calc(100% - 30px); padding: 11px 15px; border-radius: 11px;
+            background: #202124; color: #fff; font-size: 13px; opacity: 0; transform: translate(-50%, 14px);
+            pointer-events: none; transition: .18s ease;
+        }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        @media (min-width: 760px) {
+            .app { width: min(1000px, 100%); margin: 0 auto; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+            .bottom-nav { width: min(1000px, 100%); margin: 0 auto; }
+            .fab { right: max(28px, calc((100vw - 1000px) / 2 + 28px)); }
+            .backdrop { align-items: center; justify-content: center; padding: 24px; }
+            .sheet { max-width: 520px; border-radius: 22px; padding: 14px 24px 24px; }
+            .timeline-event-title { font-size: 13px; }
+        }
+        @media (prefers-color-scheme: dark) {
+            .sheet { background: #202124; color: #f1f3f4; }
+            .field label, .details-time { color: #bdc1c6; }
+            .field input, .field textarea { background: #292a2d; border-color: #5f6368; color: #f1f3f4; }
+            .close, .action.secondary { background: #303134; color: #e8eaed; }
+        }
+    </style>
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand"><strong>планиИруй!</strong><span id="selected-label"></span></div>
+        <div class="top-actions">
+            <button class="top-button" id="today">Сегодня</button>
+            <button class="top-button arrow" id="previous" aria-label="Предыдущая неделя">‹</button>
+            <button class="top-button arrow" id="next" aria-label="Следующая неделя">›</button>
+        </div>
+    </header>
+    <div class="week-strip" id="week-strip"></div>
+    <main class="content">
+        <div class="timeline-scroll" id="timeline-scroll"><div class="timeline" id="timeline"></div></div>
+        <div class="agenda-scroll" id="agenda-scroll" hidden></div>
+    </main>
+    <nav class="bottom-nav">
+        <button class="nav-button active" data-view="timeline"><span>▥</span>День</button>
+        <button class="nav-button" data-view="agenda"><span>≡</span>Расписание</button>
+    </nav>
+</div>
+<button class="fab" id="add" aria-label="Добавить мероприятие">+</button>
+
+<div class="backdrop" id="create-backdrop">
+    <section class="sheet" role="dialog" aria-modal="true">
+        <div class="handle"></div>
+        <div class="sheet-head"><h2>Новое мероприятие</h2><button class="close" data-close="create">×</button></div>
+        <form id="create-form">
+            <div class="field"><label for="title">Название</label><input id="title" maxlength="255" required placeholder="Контрольная по физике"></div>
+            <div class="field"><label for="start-at">Начало</label><input id="start-at" type="datetime-local" required></div>
+            <div class="field"><label for="end-at">Окончание</label><input id="end-at" type="datetime-local" required></div>
+            <div class="field"><label for="description">Описание</label><textarea id="description" placeholder="Аудитория, материалы, детали"></textarea></div>
+            <p class="error" id="create-error"></p>
+            <div class="actions"><button type="button" class="action secondary" data-close="create">Отмена</button><button class="action primary" id="save">Сохранить</button></div>
+        </form>
+    </section>
+</div>
+
+<div class="backdrop" id="details-backdrop">
+    <section class="sheet" role="dialog" aria-modal="true">
+        <div class="handle"></div>
+        <div class="sheet-head"><h2 id="details-title"></h2><button class="close" data-close="details">×</button></div>
+        <div class="details-time" id="details-time"></div>
+        <div class="details-description" id="details-description"></div>
+        <p class="error" id="details-error"></p>
+        <div class="actions"><button class="action danger" id="delete">Удалить</button><button class="action primary" id="complete">Выполнено</button></div>
+    </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+    'use strict';
+    const HOUR_HEIGHT = 56;
+    const state = {
+        selected: dayStart(new Date()),
+        events: [],
+        active: null,
+        view: new URLSearchParams(location.search).get('view') === 'agenda' ? 'agenda' : 'timeline'
+    };
+    const el = id => document.getElementById(id);
+    const dayLabel = new Intl.DateTimeFormat('ru-RU', {weekday:'long', day:'numeric', month:'long'});
+    const shortDay = new Intl.DateTimeFormat('ru-RU', {weekday:'short'});
+    const timeLabel = new Intl.DateTimeFormat('ru-RU', {hour:'2-digit', minute:'2-digit'});
+    function dayStart(date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
+    function key(date) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; }
+    function sameDay(a,b) { return key(a) === key(b); }
+    function eventStart(event) { return new Date(event.start); }
+    function eventEnd(event) { return new Date(event.end); }
+    function capitalize(text) { return text ? text[0].toUpperCase()+text.slice(1) : ''; }
+    function monday(date) { const result=dayStart(date); result.setDate(result.getDate()-((result.getDay()+6)%7)); return result; }
+    function inputValue(date) {
+        const pad=n=>String(n).padStart(2,'0');
+        return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function renderWeek() {
+        const strip=el('week-strip'); strip.replaceChildren();
+        const first=monday(state.selected), today=dayStart(new Date());
+        for(let i=0;i<7;i++) {
+            const date=new Date(first); date.setDate(first.getDate()+i);
+            const button=document.createElement('button'); button.className='week-day'; button.type='button';
+            if(sameDay(date,today)) button.classList.add('today');
+            if(sameDay(date,state.selected)) button.classList.add('selected');
+            if(state.events.some(event=>sameDay(eventStart(event),date))) button.classList.add('has-events');
+            const name=document.createElement('span'); name.className='week-day-name'; name.textContent=shortDay.format(date).replace('.','');
+            const number=document.createElement('span'); number.className='week-day-number'; number.textContent=date.getDate();
+            button.append(name,number); button.onclick=()=>{state.selected=dayStart(date); render(); scrollToEvents();};
+            strip.append(button);
+        }
+        el('selected-label').textContent=capitalize(dayLabel.format(state.selected));
+    }
+
+    function selectedEvents() {
+        return state.events.filter(event=>sameDay(eventStart(event),state.selected)).sort((a,b)=>eventStart(a)-eventStart(b));
+    }
+    function minuteOfDay(date) { return date.getHours()*60+date.getMinutes(); }
+    function layoutColumns(events) {
+        const active=[]; let maxColumns=1;
+        events.forEach(event=>{
+            const start=eventStart(event);
+            for(let i=active.length-1;i>=0;i--) if(eventEnd(active[i].event)<=start) active.splice(i,1);
+            const used=new Set(active.map(item=>item.column)); let column=0; while(used.has(column)) column++;
+            event._column=column; active.push({event,column}); maxColumns=Math.max(maxColumns,column+1);
+        });
+        events.forEach(event=>event._columns=maxColumns);
+        return events;
+    }
+    function timelineEvent(event) {
+        const start=eventStart(event), end=eventEnd(event);
+        const button=document.createElement('button'); button.type='button';
+        button.className='timeline-event'+(event.is_completed?' done':'');
+        const top=Math.max(0,minuteOfDay(start)/60*HOUR_HEIGHT);
+        const duration=Math.max(30,(end-start)/60000);
+        button.style.top=`${top}px`; button.style.height=`${Math.max(32,duration/60*HOUR_HEIGHT-2)}px`;
+        button.style.left=`calc(${event._column/event._columns*100}% + 2px)`;
+        button.style.width=`calc(${100/event._columns}% - 4px)`;
+        const title=document.createElement('span'); title.className='timeline-event-title'; title.textContent=event.title;
+        const time=document.createElement('span'); time.className='timeline-event-time'; time.textContent=`${timeLabel.format(start)}–${timeLabel.format(end)}`;
+        button.append(title,time); button.onclick=()=>openDetails(event); return button;
+    }
+    function renderTimeline() {
+        const timeline=el('timeline'); timeline.replaceChildren();
+        for(let hour=0;hour<24;hour++) {
+            const row=document.createElement('div'); row.className='hour-row'; row.style.top=`${hour*HOUR_HEIGHT}px`;
+            const label=document.createElement('span'); label.className='hour-label'; label.textContent=`${String(hour).padStart(2,'0')}:00`;
+            row.append(label); timeline.append(row);
+        }
+        const layer=document.createElement('div'); layer.className='events-layer';
+        const events=layoutColumns(selectedEvents()); events.forEach(event=>layer.append(timelineEvent(event))); timeline.append(layer);
+        if(sameDay(state.selected,new Date())) {
+            const line=document.createElement('div'); line.className='now-line'; line.style.top=`${minuteOfDay(new Date())/60*HOUR_HEIGHT}px`; timeline.append(line);
+        }
+        if(!events.length) { const empty=document.createElement('div'); empty.className='empty-day'; empty.textContent='На этот день ничего не запланировано'; timeline.append(empty); }
+    }
+    function agendaCard(event) {
+        const button=document.createElement('button'); button.className='agenda-event'+(event.is_completed?' done':''); button.type='button';
+        const time=document.createElement('span'); time.className='agenda-time'; time.textContent=`${timeLabel.format(eventStart(event))}\n${timeLabel.format(eventEnd(event))}`;
+        const mark=document.createElement('span'); mark.className='agenda-mark';
+        const content=document.createElement('span'); const title=document.createElement('span'); title.className='agenda-title'; title.textContent=event.title; content.append(title);
+        if(event.description) { const desc=document.createElement('div'); desc.className='agenda-description'; desc.textContent=event.description; content.append(desc); }
+        button.append(time,mark,content); button.onclick=()=>openDetails(event); return button;
+    }
+    function renderAgenda() {
+        const target=el('agenda-scroll'); target.replaceChildren(); let previous='';
+        [...state.events].sort((a,b)=>eventStart(a)-eventStart(b)).forEach(event=>{
+            const current=key(eventStart(event));
+            if(current!==previous) { const heading=document.createElement('h3'); heading.className='agenda-date'; heading.textContent=capitalize(dayLabel.format(eventStart(event))); target.append(heading); previous=current; }
+            target.append(agendaCard(event));
+        });
+        if(!state.events.length) { const empty=document.createElement('p'); empty.className='empty-day'; empty.textContent='Расписание пока пустое'; target.append(empty); }
+    }
+    function render() {
+        renderWeek(); renderTimeline(); renderAgenda();
+        const timelineMode=state.view==='timeline'; el('timeline-scroll').hidden=!timelineMode; el('agenda-scroll').hidden=timelineMode;
+        document.querySelectorAll('.nav-button').forEach(button=>button.classList.toggle('active',button.dataset.view===state.view));
+    }
+    function scrollToEvents() {
+        if(state.view!=='timeline') return;
+        const events=selectedEvents(); const now=new Date();
+        const minutes=sameDay(state.selected,now)?minuteOfDay(now):(events.length?minuteOfDay(eventStart(events[0])):8*60);
+        requestAnimationFrame(()=>{el('timeline-scroll').scrollTop=Math.max(0,minutes/60*HOUR_HEIGHT-150);});
+    }
+    function authenticatedOptions(options={}) {
+        const headers={...(options.headers||{})};
+        try {
+            const token=sessionStorage.getItem('planiruy_access_token');
+            if(token) headers.Authorization=`Bearer ${token}`;
+        } catch (_) {}
+        return {...options,headers,credentials:'include'};
+    }
+    async function authenticatedFetch(url,options={}) {
+        const response=await fetch(url,authenticatedOptions(options));
+        if(response.status===401) {
+            window.location.replace('/miniapp?destination=calendar');
+            throw new Error('Требуется повторная авторизация');
+        }
+        return response;
+    }
+    async function loadEvents() {
+        try {
+            const response=await authenticatedFetch('/api/v2/events');
+            if(!response.ok) throw new Error('Не удалось загрузить расписание');
+            state.events=await response.json(); render(); scrollToEvents();
+        } catch(error) { toast(error.message); }
+    }
+    async function request(url,options) {
+        const response=await authenticatedFetch(url,options); const data=await response.json().catch(()=>({}));
+        if(!response.ok) throw new Error(data.detail||'Не удалось выполнить действие'); return data;
+    }
+    function openCreate() {
+        const start=new Date(state.selected), now=new Date();
+        if(sameDay(start,now)) start.setHours(now.getHours()+1,0,0,0); else start.setHours(9,0,0,0);
+        const end=new Date(start.getTime()+60*60*1000);
+        el('title').value=''; el('description').value=''; el('start-at').value=inputValue(start); el('end-at').value=inputValue(end);
+        el('create-error').style.display='none'; el('create-backdrop').classList.add('open'); setTimeout(()=>el('title').focus(),80);
+    }
+    function close(name) { el(`${name}-backdrop`).classList.remove('open'); }
+    function openDetails(event) {
+        state.active=event; el('details-title').textContent=event.title;
+        el('details-time').textContent=`${capitalize(dayLabel.format(eventStart(event)))} · ${timeLabel.format(eventStart(event))}–${timeLabel.format(eventEnd(event))}`;
+        el('details-description').textContent=event.description||'Без описания'; el('complete').textContent=event.is_completed?'Вернуть в работу':'Выполнено';
+        el('details-error').style.display='none'; el('details-backdrop').classList.add('open');
+    }
+    el('create-form').onsubmit=async event=>{
+        event.preventDefault(); const save=el('save'), error=el('create-error'); save.disabled=true; error.style.display='none';
+        try {
+            const start=new Date(el('start-at').value), end=new Date(el('end-at').value);
+            if(end<=start) throw new Error('Окончание должно быть позже начала');
+            await request('/api/v2/events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:el('title').value.trim(),description:el('description').value.trim()||null,start_at:start.toISOString(),end_at:end.toISOString()})});
+            state.selected=dayStart(start); close('create'); await loadEvents(); toast('Мероприятие добавлено');
+        } catch(err) { error.textContent=err.message; error.style.display='block'; } finally { save.disabled=false; }
+    };
+    el('complete').onclick=async()=>{
+        if(!state.active)return; const button=el('complete'); button.disabled=true;
+        try { await request(`/api/v2/events/${state.active.id}/toggle-complete`,{method:'POST'}); close('details'); await loadEvents(); toast('Статус обновлён'); }
+        catch(err){el('details-error').textContent=err.message;el('details-error').style.display='block';} finally{button.disabled=false;}
+    };
+    el('delete').onclick=async()=>{
+        if(!state.active||!confirm(`Удалить «${state.active.title}»?`))return; const button=el('delete'); button.disabled=true;
+        try { await request(`/api/v2/events/${state.active.id}`,{method:'DELETE'}); close('details'); await loadEvents(); toast('Мероприятие удалено'); }
+        catch(err){el('details-error').textContent=err.message;el('details-error').style.display='block';} finally{button.disabled=false;}
+    };
+    function toast(message){const node=el('toast');node.textContent=message;node.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>node.classList.remove('show'),2500);}
+    el('today').onclick=()=>{state.selected=dayStart(new Date());state.view='timeline';render();scrollToEvents();};
+    el('previous').onclick=()=>{state.selected.setDate(state.selected.getDate()-7);state.selected=dayStart(state.selected);render();scrollToEvents();};
+    el('next').onclick=()=>{state.selected.setDate(state.selected.getDate()+7);state.selected=dayStart(state.selected);render();scrollToEvents();};
+    el('add').onclick=openCreate;
+    document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>close(button.dataset.close));
+    document.querySelectorAll('.backdrop').forEach(node=>node.onclick=event=>{if(event.target===node)node.classList.remove('open');});
+    document.querySelectorAll('.nav-button').forEach(button=>button.onclick=()=>{state.view=button.dataset.view;render();scrollToEvents();});
+    render(); loadEvents();
+})();
+</script>
+</body>
+</html>

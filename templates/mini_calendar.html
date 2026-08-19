@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>планиИруй! — Календарь</title>
+    <style>
+        :root {
+            --bg: var(--tg-theme-bg-color, #f6f7f9);
+            --surface: var(--tg-theme-secondary-bg-color, #ffffff);
+            --surface-strong: #ffffff;
+            --text: var(--tg-theme-text-color, #202124);
+            --muted: var(--tg-theme-hint-color, #6f7378);
+            --line: rgba(95, 99, 104, .16);
+            --primary: var(--tg-theme-button-color, #2563eb);
+            --primary-text: var(--tg-theme-button-text-color, #ffffff);
+            --danger: var(--tg-theme-destructive-text-color, #dc2626);
+            --event: #e8f0fe;
+            --event-text: #174ea6;
+            --success: #188038;
+            --radius: 18px;
+            --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 8px 24px rgba(0, 0, 0, .04);
+        }
+
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            padding-bottom: calc(76px + env(safe-area-inset-bottom));
+        }
+        button, input, textarea { font: inherit; }
+        button { -webkit-tap-highlight-color: transparent; }
+
+        .app-header {
+            position: sticky; top: 0; z-index: 20;
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            min-height: 64px; padding: 10px max(16px, env(safe-area-inset-left));
+            background: color-mix(in srgb, var(--surface) 94%, transparent);
+            border-bottom: 1px solid var(--line);
+        }
+        .brand { min-width: 0; }
+        .brand-name { margin: 0; font-size: 18px; font-weight: 750; letter-spacing: -.02em; }
+        .month-title { margin: 2px 0 0; color: var(--muted); font-size: 13px; text-transform: capitalize; }
+        .header-actions { display: flex; align-items: center; gap: 6px; }
+        .icon-button, .today-button {
+            min-width: 42px; height: 42px; border: 0; border-radius: 12px;
+            background: transparent; color: var(--text); cursor: pointer;
+        }
+        .icon-button { font-size: 24px; }
+        .icon-button:active, .today-button:active { background: var(--line); }
+        .today-button { padding: 0 12px; font-size: 13px; font-weight: 650; }
+
+        .layout {
+            width: min(1100px, 100%); margin: 0 auto; padding: 12px;
+            display: grid; gap: 12px;
+        }
+        .panel {
+            background: var(--surface); border: 1px solid var(--line);
+            border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+        }
+        .month-panel { padding: 12px; }
+        .weekday-row, .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+        .weekday {
+            padding: 6px 0 10px; text-align: center; color: var(--muted);
+            font-size: 11px; font-weight: 700; text-transform: uppercase;
+        }
+        .day-cell {
+            position: relative; min-width: 0; min-height: 48px; padding: 5px 2px;
+            border: 0; border-radius: 12px; background: transparent; color: var(--text);
+            display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer;
+        }
+        .day-cell:active { background: var(--line); }
+        .day-number {
+            width: 30px; height: 30px; display: grid; place-items: center;
+            border-radius: 50%; font-size: 13px; font-weight: 550;
+        }
+        .day-cell.other-month { color: color-mix(in srgb, var(--muted) 55%, transparent); }
+        .day-cell.today .day-number { color: var(--primary); font-weight: 800; }
+        .day-cell.selected .day-number { background: var(--primary); color: var(--primary-text); }
+        .event-dots { height: 5px; display: flex; align-items: center; justify-content: center; gap: 2px; }
+        .event-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--primary); }
+        .event-dot.done { background: var(--success); opacity: .7; }
+
+        .agenda-panel { min-height: 260px; }
+        .agenda-header {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 16px 18px; border-bottom: 1px solid var(--line);
+        }
+        .agenda-title { margin: 0; font-size: 17px; font-weight: 720; text-transform: capitalize; }
+        .agenda-count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+        .agenda-list { padding: 6px 12px 16px; }
+        .event-card {
+            width: 100%; margin-top: 8px; padding: 13px 12px;
+            display: grid; grid-template-columns: 54px 4px minmax(0, 1fr); gap: 10px;
+            border: 0; border-radius: 14px; background: transparent; color: var(--text);
+            text-align: left; cursor: pointer;
+        }
+        .event-card:active { background: var(--line); }
+        .event-time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+        .event-mark { border-radius: 99px; background: var(--primary); }
+        .event-card.done .event-mark { background: var(--success); }
+        .event-content { min-width: 0; }
+        .event-title { font-size: 15px; font-weight: 680; line-height: 1.25; overflow-wrap: anywhere; }
+        .event-card.done .event-title { text-decoration: line-through; opacity: .62; }
+        .event-description {
+            margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.35;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .date-group { margin-top: 12px; }
+        .date-group-title {
+            position: sticky; top: 64px; z-index: 2; margin: 0; padding: 10px 8px 6px;
+            background: var(--surface); color: var(--muted); font-size: 12px;
+            font-weight: 750; text-transform: uppercase;
+        }
+        .empty-state { padding: 46px 24px; color: var(--muted); text-align: center; }
+        .empty-icon {
+            width: 54px; height: 54px; margin: 0 auto 14px; display: grid; place-items: center;
+            border-radius: 16px; background: color-mix(in srgb, var(--primary) 10%, transparent);
+            color: var(--primary); font-size: 25px;
+        }
+        .empty-state strong { display: block; color: var(--text); margin-bottom: 6px; }
+
+        .fab {
+            position: fixed; z-index: 30; right: max(18px, env(safe-area-inset-right));
+            bottom: calc(86px + env(safe-area-inset-bottom)); width: 56px; height: 56px;
+            border: 0; border-radius: 18px; background: var(--primary); color: var(--primary-text);
+            box-shadow: 0 8px 24px color-mix(in srgb, var(--primary) 35%, transparent);
+            font-size: 30px; line-height: 1; cursor: pointer;
+        }
+        .fab:active { transform: scale(.96); }
+
+        .bottom-nav {
+            position: fixed; z-index: 25; left: 0; right: 0; bottom: 0;
+            height: calc(66px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+            display: grid; grid-template-columns: 1fr 1fr;
+            background: color-mix(in srgb, var(--surface) 96%, transparent);
+            border-top: 1px solid var(--line);
+        }
+        .nav-item {
+            border: 0; background: transparent; color: var(--muted); font-size: 12px;
+            font-weight: 650; cursor: pointer;
+        }
+        .nav-item span { display: block; font-size: 21px; line-height: 24px; margin-bottom: 2px; }
+        .nav-item.active { color: var(--primary); }
+
+        .sheet-backdrop {
+            position: fixed; inset: 0; z-index: 50; display: none;
+            align-items: flex-end; justify-content: center; padding: 0;
+            background: rgba(0, 0, 0, .34);
+        }
+        .sheet-backdrop.open { display: flex; }
+        .sheet {
+            width: 100%; max-height: min(88vh, 760px); overflow-y: auto;
+            padding: 10px 18px calc(18px + env(safe-area-inset-bottom));
+            background: var(--surface-strong); color: #202124;
+            border-radius: 22px 22px 0 0; box-shadow: 0 -8px 34px rgba(0, 0, 0, .16);
+        }
+        .sheet-handle { width: 36px; height: 4px; margin: 0 auto 12px; background: #d0d3d7; border-radius: 99px; }
+        .sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .sheet-title { margin: 0; font-size: 20px; font-weight: 750; }
+        .close-button { width: 40px; height: 40px; border: 0; border-radius: 50%; background: #f1f3f4; color: #3c4043; font-size: 22px; }
+        .field { margin-top: 17px; }
+        .field label { display: block; margin: 0 0 7px; color: #5f6368; font-size: 13px; font-weight: 650; }
+        .field input, .field textarea {
+            width: 100%; min-height: 48px; padding: 12px 13px; border: 1px solid #dadce0;
+            border-radius: 12px; background: #fff; color: #202124; outline: none;
+        }
+        .field textarea { min-height: 88px; resize: vertical; }
+        .field input:focus, .field textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
+        .sheet-actions { display: flex; gap: 10px; margin-top: 22px; }
+        .action-button {
+            min-height: 48px; padding: 0 17px; border: 0; border-radius: 13px;
+            font-weight: 700; cursor: pointer;
+        }
+        .action-button.primary { flex: 1; background: #2563eb; color: #fff; }
+        .action-button.secondary { background: #f1f3f4; color: #3c4043; }
+        .action-button.danger { background: #fce8e6; color: #b3261e; }
+        .action-button:disabled { opacity: .55; }
+        .details-date { margin-top: 8px; color: #5f6368; line-height: 1.4; }
+        .details-description { margin: 18px 0 0; color: #3c4043; white-space: pre-wrap; line-height: 1.5; }
+        .status-pill {
+            display: inline-flex; margin-top: 16px; padding: 6px 10px; border-radius: 99px;
+            background: #e8f0fe; color: #174ea6; font-size: 12px; font-weight: 750;
+        }
+        .status-pill.done { background: #e6f4ea; color: #137333; }
+        .form-error { display: none; margin-top: 12px; color: #b3261e; font-size: 13px; }
+
+        .toast {
+            position: fixed; z-index: 80; left: 50%; bottom: calc(82px + env(safe-area-inset-bottom));
+            max-width: calc(100% - 32px); padding: 12px 16px; border-radius: 12px;
+            background: #202124; color: #fff; font-size: 14px;
+            transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+            transition: opacity .18s ease, transform .18s ease;
+        }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        @media (min-width: 760px) {
+            body { padding-bottom: 24px; }
+            .app-header { padding-inline: 24px; }
+            .layout { grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); padding: 20px; gap: 18px; }
+            .month-panel { align-self: start; padding: 18px; }
+            .day-cell { min-height: 58px; }
+            .agenda-panel { min-height: calc(100vh - 106px); }
+            .bottom-nav { display: none; }
+            .fab { right: 28px; bottom: 28px; }
+            .sheet-backdrop { align-items: center; padding: 24px; }
+            .sheet { max-width: 520px; border-radius: 22px; padding: 14px 24px 24px; }
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --surface-strong: #202124;
+                --line: rgba(255, 255, 255, .12);
+                --event: #243b64;
+                --event-text: #d2e3fc;
+            }
+            .sheet { color: #f1f3f4; }
+            .close-button, .action-button.secondary { background: #303134; color: #e8eaed; }
+            .field label, .details-date { color: #bdc1c6; }
+            .field input, .field textarea { background: #292a2d; border-color: #5f6368; color: #f1f3f4; }
+            .details-description { color: #e8eaed; }
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="brand">
+            <h1 class="brand-name">планиИруй!</h1>
+            <p class="month-title" id="month-title"></p>
+        </div>
+        <div class="header-actions">
+            <button class="today-button" id="today-button">Сегодня</button>
+            <button class="icon-button" id="previous-button" aria-label="Предыдущий месяц">‹</button>
+            <button class="icon-button" id="next-button" aria-label="Следующий месяц">›</button>
+        </div>
+    </header>
+
+    <main class="layout">
+        <section class="panel month-panel" id="month-panel" aria-label="Календарь на месяц">
+            <div class="weekday-row">
+                <div class="weekday">Пн</div><div class="weekday">Вт</div><div class="weekday">Ср</div>
+                <div class="weekday">Чт</div><div class="weekday">Пт</div><div class="weekday">Сб</div><div class="weekday">Вс</div>
+            </div>
+            <div class="month-grid" id="month-grid"></div>
+        </section>
+
+        <section class="panel agenda-panel">
+            <div class="agenda-header">
+                <h2 class="agenda-title" id="agenda-title"></h2>
+                <span class="agenda-count" id="agenda-count"></span>
+            </div>
+            <div class="agenda-list" id="agenda-list"></div>
+        </section>
+    </main>
+
+    <button class="fab" id="add-button" aria-label="Добавить дедлайн">+</button>
+
+    <nav class="bottom-nav" aria-label="Разделы календаря">
+        <button class="nav-item active" data-view="calendar"><span>▦</span>Календарь</button>
+        <button class="nav-item" data-view="agenda"><span>≡</span>Расписание</button>
+    </nav>
+
+    <div class="sheet-backdrop" id="create-backdrop">
+        <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="create-title">
+            <div class="sheet-handle"></div>
+            <div class="sheet-header">
+                <h2 class="sheet-title" id="create-title">Новый дедлайн</h2>
+                <button class="close-button" data-close="create" aria-label="Закрыть">×</button>
+            </div>
+            <form id="create-form">
+                <div class="field">
+                    <label for="event-title">Название</label>
+                    <input id="event-title" maxlength="255" required autocomplete="off" placeholder="Например, сдать лабораторную">
+                </div>
+                <div class="field">
+                    <label for="event-deadline">Дата и время</label>
+                    <input id="event-deadline" type="datetime-local" required>
+                </div>
+                <div class="field">
+                    <label for="event-description">Описание</label>
+                    <textarea id="event-description" placeholder="Детали, аудитория, ссылка"></textarea>
+                </div>
+                <p class="form-error" id="create-error"></p>
+                <div class="sheet-actions">
+                    <button type="button" class="action-button secondary" data-close="create">Отмена</button>
+                    <button type="submit" class="action-button primary" id="save-button">Сохранить</button>
+                </div>
+            </form>
+        </section>
+    </div>
+
+    <div class="sheet-backdrop" id="details-backdrop">
+        <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="details-title">
+            <div class="sheet-handle"></div>
+            <div class="sheet-header">
+                <h2 class="sheet-title" id="details-title"></h2>
+                <button class="close-button" data-close="details" aria-label="Закрыть">×</button>
+            </div>
+            <div class="details-date" id="details-date"></div>
+            <div class="status-pill" id="details-status"></div>
+            <p class="details-description" id="details-description"></p>
+            <p class="form-error" id="details-error"></p>
+            <div class="sheet-actions">
+                <button class="action-button danger" id="delete-button">Удалить</button>
+                <button class="action-button primary" id="complete-button">Выполнено</button>
+            </div>
+        </section>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        (() => {
+            'use strict';
+            const state = {
+                cursor: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+                selected: startOfDay(new Date()),
+                events: [],
+                activeEvent: null,
+                view: new URLSearchParams(location.search).get('view') === 'agenda' ? 'agenda' : 'calendar'
+            };
+            const el = id => document.getElementById(id);
+            const monthGrid = el('month-grid');
+            const agendaList = el('agenda-list');
+            const monthPanel = el('month-panel');
+            const dateFormat = new Intl.DateTimeFormat('ru-RU', {weekday: 'long', day: 'numeric', month: 'long'});
+            const monthFormat = new Intl.DateTimeFormat('ru-RU', {month: 'long', year: 'numeric'});
+            const timeFormat = new Intl.DateTimeFormat('ru-RU', {hour: '2-digit', minute: '2-digit'});
+
+            function startOfDay(date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
+            function dateKey(date) {
+                const pad = value => String(value).padStart(2, '0');
+                return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+            }
+            function sameDay(a, b) { return dateKey(a) === dateKey(b); }
+            function capitalize(value) { return value ? value[0].toUpperCase() + value.slice(1) : ''; }
+            function localInputValue(date) {
+                const pad = value => String(value).padStart(2, '0');
+                return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+            }
+            function eventDate(event) { return new Date(event.start); }
+            function eventsForDate(date) {
+                return state.events.filter(event => sameDay(eventDate(event), date))
+                    .sort((a, b) => eventDate(a) - eventDate(b));
+            }
+
+            function renderMonth() {
+                el('month-title').textContent = capitalize(monthFormat.format(state.cursor));
+                monthGrid.replaceChildren();
+                const first = new Date(state.cursor.getFullYear(), state.cursor.getMonth(), 1);
+                const offset = (first.getDay() + 6) % 7;
+                const today = startOfDay(new Date());
+                for (let index = 0; index < 42; index++) {
+                    const date = new Date(first.getFullYear(), first.getMonth(), index - offset + 1);
+                    const events = eventsForDate(date);
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'day-cell';
+                    if (date.getMonth() !== state.cursor.getMonth()) button.classList.add('other-month');
+                    if (sameDay(date, today)) button.classList.add('today');
+                    if (sameDay(date, state.selected)) button.classList.add('selected');
+                    button.setAttribute('aria-label', dateFormat.format(date));
+
+                    const number = document.createElement('span');
+                    number.className = 'day-number';
+                    number.textContent = date.getDate();
+                    const dots = document.createElement('span');
+                    dots.className = 'event-dots';
+                    events.slice(0, 3).forEach(event => {
+                        const dot = document.createElement('span');
+                        dot.className = 'event-dot' + (event.is_completed ? ' done' : '');
+                        dots.append(dot);
+                    });
+                    button.append(number, dots);
+                    button.addEventListener('click', () => {
+                        state.selected = startOfDay(date);
+                        state.cursor = new Date(date.getFullYear(), date.getMonth(), 1);
+                        render();
+                    });
+                    monthGrid.append(button);
+                }
+            }
+
+            function eventCard(event) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'event-card' + (event.is_completed ? ' done' : '');
+                const time = document.createElement('span');
+                time.className = 'event-time';
+                time.textContent = timeFormat.format(eventDate(event));
+                const mark = document.createElement('span');
+                mark.className = 'event-mark';
+                const content = document.createElement('span');
+                content.className = 'event-content';
+                const title = document.createElement('span');
+                title.className = 'event-title';
+                title.textContent = event.title;
+                content.append(title);
+                if (event.description) {
+                    const description = document.createElement('span');
+                    description.className = 'event-description';
+                    description.textContent = event.description;
+                    content.append(description);
+                }
+                button.append(time, mark, content);
+                button.addEventListener('click', () => openDetails(event));
+                return button;
+            }
+
+            function emptyState(message) {
+                const box = document.createElement('div');
+                box.className = 'empty-state';
+                box.innerHTML = '<div class="empty-icon">✓</div><strong>Свободный день</strong>';
+                const text = document.createElement('span');
+                text.textContent = message;
+                box.append(text);
+                return box;
+            }
+
+            function renderDayAgenda() {
+                const events = eventsForDate(state.selected);
+                el('agenda-title').textContent = capitalize(dateFormat.format(state.selected));
+                el('agenda-count').textContent = events.length ? `${events.length} ${plural(events.length, 'событие', 'события', 'событий')}` : '';
+                agendaList.replaceChildren();
+                if (!events.length) {
+                    agendaList.append(emptyState('Нажмите +, чтобы добавить дедлайн.'));
+                    return;
+                }
+                events.forEach(event => agendaList.append(eventCard(event)));
+            }
+
+            function renderFullAgenda() {
+                el('agenda-title').textContent = 'Расписание';
+                const sorted = [...state.events].sort((a, b) => eventDate(a) - eventDate(b));
+                el('agenda-count').textContent = `${sorted.length} ${plural(sorted.length, 'событие', 'события', 'событий')}`;
+                agendaList.replaceChildren();
+                if (!sorted.length) {
+                    agendaList.append(emptyState('Здесь появятся ваши дедлайны.'));
+                    return;
+                }
+                let lastKey = '';
+                sorted.forEach(event => {
+                    const date = eventDate(event);
+                    const key = dateKey(date);
+                    if (key !== lastKey) {
+                        const heading = document.createElement('h3');
+                        heading.className = 'date-group-title';
+                        heading.textContent = capitalize(dateFormat.format(date));
+                        agendaList.append(heading);
+                        lastKey = key;
+                    }
+                    agendaList.append(eventCard(event));
+                });
+            }
+
+            function plural(number, one, few, many) {
+                const mod10 = number % 10, mod100 = number % 100;
+                if (mod10 === 1 && mod100 !== 11) return one;
+                if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+                return many;
+            }
+
+            function render() {
+                renderMonth();
+                monthPanel.hidden = state.view === 'agenda';
+                document.querySelectorAll('.nav-item').forEach(button => {
+                    button.classList.toggle('active', button.dataset.view === state.view);
+                });
+                state.view === 'agenda' ? renderFullAgenda() : renderDayAgenda();
+            }
+
+            async function loadEvents() {
+                try {
+                    const response = await fetch('/api/events', {credentials: 'same-origin'});
+                    if (response.status === 401) {
+                        location.replace('/miniapp');
+                        return;
+                    }
+                    if (!response.ok) throw new Error('Не удалось загрузить календарь');
+                    state.events = await response.json();
+                    render();
+                } catch (error) {
+                    showToast(error.message);
+                }
+            }
+
+            function openCreate() {
+                const date = new Date(state.selected);
+                const now = new Date();
+                if (sameDay(date, now)) date.setHours(now.getHours() + 1, 0, 0, 0);
+                else date.setHours(9, 0, 0, 0);
+                el('event-deadline').value = localInputValue(date);
+                el('event-title').value = '';
+                el('event-description').value = '';
+                el('create-error').style.display = 'none';
+                el('create-backdrop').classList.add('open');
+                setTimeout(() => el('event-title').focus(), 80);
+            }
+
+            function closeSheet(name) { el(`${name}-backdrop`).classList.remove('open'); }
+
+            function openDetails(event) {
+                state.activeEvent = event;
+                el('details-title').textContent = event.title;
+                el('details-date').textContent = capitalize(new Intl.DateTimeFormat('ru-RU', {
+                    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                }).format(eventDate(event)));
+                el('details-description').textContent = event.description || 'Без описания';
+                el('details-status').textContent = event.is_completed ? 'Выполнено' : 'В работе';
+                el('details-status').className = 'status-pill' + (event.is_completed ? ' done' : '');
+                el('complete-button').textContent = event.is_completed ? 'Вернуть в работу' : 'Выполнено';
+                el('details-error').style.display = 'none';
+                el('details-backdrop').classList.add('open');
+            }
+
+            async function requestJson(url, options) {
+                const response = await fetch(url, {...options, credentials: 'same-origin'});
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.detail || 'Не удалось выполнить действие');
+                return data;
+            }
+
+            el('create-form').addEventListener('submit', async event => {
+                event.preventDefault();
+                const saveButton = el('save-button');
+                const errorNode = el('create-error');
+                saveButton.disabled = true;
+                errorNode.style.display = 'none';
+                try {
+                    const deadline = new Date(el('event-deadline').value);
+                    await requestJson('/api/events', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            title: el('event-title').value.trim(),
+                            description: el('event-description').value.trim() || null,
+                            deadline: deadline.toISOString()
+                        })
+                    });
+                    state.selected = startOfDay(deadline);
+                    state.cursor = new Date(deadline.getFullYear(), deadline.getMonth(), 1);
+                    closeSheet('create');
+                    await loadEvents();
+                    showToast('Дедлайн добавлен');
+                } catch (error) {
+                    errorNode.textContent = error.message;
+                    errorNode.style.display = 'block';
+                } finally {
+                    saveButton.disabled = false;
+                }
+            });
+
+            el('complete-button').addEventListener('click', async () => {
+                if (!state.activeEvent) return;
+                const button = el('complete-button');
+                button.disabled = true;
+                try {
+                    await requestJson(`/events/${state.activeEvent.id}/toggle-complete`, {method: 'POST'});
+                    closeSheet('details');
+                    await loadEvents();
+                    showToast('Статус обновлён');
+                } catch (error) {
+                    el('details-error').textContent = error.message;
+                    el('details-error').style.display = 'block';
+                } finally { button.disabled = false; }
+            });
+
+            el('delete-button').addEventListener('click', async () => {
+                if (!state.activeEvent || !confirm(`Удалить «${state.activeEvent.title}»?`)) return;
+                const button = el('delete-button');
+                button.disabled = true;
+                try {
+                    await requestJson(`/api/events/${state.activeEvent.id}`, {method: 'DELETE'});
+                    closeSheet('details');
+                    await loadEvents();
+                    showToast('Дедлайн удалён');
+                } catch (error) {
+                    el('details-error').textContent = error.message;
+                    el('details-error').style.display = 'block';
+                } finally { button.disabled = false; }
+            });
+
+            function showToast(message) {
+                const toast = el('toast');
+                toast.textContent = message;
+                toast.classList.add('show');
+                clearTimeout(showToast.timer);
+                showToast.timer = setTimeout(() => toast.classList.remove('show'), 2600);
+            }
+
+            el('previous-button').addEventListener('click', () => {
+                state.cursor = new Date(state.cursor.getFullYear(), state.cursor.getMonth() - 1, 1);
+                state.selected = new Date(state.cursor);
+                render();
+            });
+            el('next-button').addEventListener('click', () => {
+                state.cursor = new Date(state.cursor.getFullYear(), state.cursor.getMonth() + 1, 1);
+                state.selected = new Date(state.cursor);
+                render();
+            });
+            el('today-button').addEventListener('click', () => {
+                state.selected = startOfDay(new Date());
+                state.cursor = new Date(state.selected.getFullYear(), state.selected.getMonth(), 1);
+                state.view = 'calendar';
+                render();
+            });
+            el('add-button').addEventListener('click', openCreate);
+            document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => closeSheet(button.dataset.close)));
+            document.querySelectorAll('.sheet-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => {
+                if (event.target === backdrop) backdrop.classList.remove('open');
+            }));
+            document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
+                state.view = button.dataset.view;
+                render();
+            }));
+
+            render();
+            loadEvents();
+        })();
+    </script>
+</body>
+</html>
