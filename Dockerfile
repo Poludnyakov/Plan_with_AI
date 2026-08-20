@@ -22,6 +22,10 @@ COPY requirements.txt /app/
 # Install python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# MAX API uses the Russian Trusted Root CA required by the official MAX docs.
+COPY certs/russian_trusted_root_ca.crt /usr/local/share/ca-certificates/russian_trusted_root_ca.crt
+RUN update-ca-certificates
+
 # Copy the rest of the project files
 COPY . /app/
 

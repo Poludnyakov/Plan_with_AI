@@ -2,6 +2,7 @@
 .env
 .env.production
 .env.*
+!.env.max.example
 *.env
 
 # Python

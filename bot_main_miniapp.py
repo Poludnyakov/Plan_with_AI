@@ -4,12 +4,7 @@ from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import Bot, Dispatcher
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from aiogram.types import (
-    BotCommand,
-    MenuButtonWebApp,
-    TelegramObject,
-    WebAppInfo,
-)
+from aiogram.types import MenuButtonDefault, TelegramObject
 
 from config import settings
 from database import async_session_maker, init_db
@@ -37,15 +32,8 @@ class DbSessionMiddleware(BaseMiddleware):
 
 
 async def set_bot_menu(bot: Bot) -> None:
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Перезапустить ассистента"),
-        BotCommand(command="calendar", description="Открыть календарь Mini App"),
-        BotCommand(command="list", description="Открыть список дедлайнов"),
-    ])
-    await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
-        text="Календарь",
-        web_app=WebAppInfo(url=f"{settings.APP_URL.rstrip('/')}/miniapp?destination=calendar"),
-    ))
+    await bot.delete_my_commands()
+    await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
 
 
 async def main() -> None:

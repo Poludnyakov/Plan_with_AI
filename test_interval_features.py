@@ -59,7 +59,11 @@ async def test_pipeline_persists_start_and_end(interval_db):
     assert timing.start_at.replace(tzinfo=timezone.utc) == start
     assert timing.end_at.replace(tzinfo=timezone.utc) == end
     assert events[0].deadline.replace(tzinfo=timezone.utc) == end
-    assert len(events[0].reminders) == 5
+    assert 1 <= len(events[0].reminders) <= 4
+    assert all(
+        reminder.remind_at.replace(tzinfo=timezone.utc) < start
+        for reminder in events[0].reminders
+    )
 
 
 @pytest.mark.anyio

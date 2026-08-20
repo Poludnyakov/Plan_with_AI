@@ -22,6 +22,15 @@ from interval_models import EventTiming
 from interval_pipeline import REMINDER_OFFSETS, normalize_datetime
 from models import Event, EventStatus, Reminder, ReminderStatus, User
 from telegram_miniapp_auth import validate_telegram_init_data
+from account_service import ensure_identity
+from unified_calendar import (
+    create_linked_event,
+    delete_linked_event,
+    list_linked_events,
+    payload as calendar_payload,
+    toggle_linked_event,
+    update_linked_event,
+)
 
 
 logger = logging.getLogger("MiniAppIntervalRouter")
@@ -94,6 +103,23 @@ class IntervalCreate(BaseModel):
     description: Optional[str] = None
     start_at: datetime
     end_at: datetime
+    reminders: list[datetime] | None = Field(default=None, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_times(self):
+        if self.end_at <= self.start_at:
+            raise ValueError("Окончание должно быть позже начала")
+        if self.end_at - self.start_at > timedelta(days=7):
+            raise ValueError("Продолжительность не может превышать семь дней")
+        return self
+
+
+class IntervalUpdate(BaseModel):
+    start_at: datetime
+    end_at: datetime
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    reminders: list[datetime] | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def validate_times(self):
@@ -161,6 +187,8 @@ async def miniapp_auth(payload: MiniAppAuthRequest, db: AsyncSession = Depends(g
         db.add(user)
         await db.commit()
         await db.refresh(user)
+    await ensure_identity(db, "telegram", tg_id)
+    await db.commit()
 
     target = "/mini-timeline?view=agenda" if payload.destination == "dashboard" else "/mini-timeline"
     session_cookie = sign_tg_id(tg_id, get_cookie_secret())
@@ -184,8 +212,16 @@ async def miniapp_auth(payload: MiniAppAuthRequest, db: AsyncSession = Depends(g
 async def mini_timeline(request: Request):
     return templates.TemplateResponse(
         request=request,
-        name="mini_timeline.html",
-        context={"request": request},
+        name="calendar_reliable.html",
+        context={
+            "request": request,
+            "calendar_config": {
+                "apiBase": "/api/v2/events",
+                "reauthUrl": "/miniapp?destination=calendar",
+                "tokenKey": "planiruy_access_token",
+                "platform": "telegram",
+            },
+        },
         headers={"Cache-Control": "no-store"},
     )
 
@@ -195,26 +231,8 @@ async def get_interval_events(
     user_tg_id: int = Depends(get_miniapp_user_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await current_user(db, user_tg_id)
-    result = await db.execute(
-        select(Event, EventTiming)
-        .outerjoin(EventTiming, EventTiming.event_id == Event.id)
-        .filter(Event.user_id == user.id, Event.status == EventStatus.CONFIRMED)
-        .order_by(EventTiming.start_at.asc().nullslast(), Event.deadline.asc())
-    )
-    payload = []
-    for event, timing in result.all():
-        end_at = timing.end_at if timing else event.deadline
-        start_at = timing.start_at if timing else event.deadline - timedelta(minutes=30)
-        payload.append({
-            "id": event.id,
-            "title": event.title,
-            "description": event.description or "",
-            "start": start_at.isoformat(),
-            "end": end_at.isoformat(),
-            "is_completed": event.is_completed,
-        })
-    return payload
+    entries = await list_linked_events(db, "telegram", user_tg_id)
+    return [calendar_payload(entry) for entry in entries]
 
 
 @router.post("/api/v2/events", status_code=status.HTTP_201_CREATED)
@@ -223,76 +241,58 @@ async def create_interval_event(
     user_tg_id: int = Depends(get_miniapp_user_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await current_user(db, user_tg_id)
-    start_at = normalize_datetime(payload.start_at, user.timezone)
-    end_at = normalize_datetime(payload.end_at, user.timezone)
-    conflict = await find_conflict(db, user.id, start_at, end_at)
-    if conflict:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Время пересекается с мероприятием «{conflict[0].title}»",
+    try:
+        entry = await create_linked_event(
+            db, "telegram", user_tg_id, payload.title,
+            payload.description or "", payload.start_at, payload.end_at,
+            payload.reminders,
         )
+        return calendar_payload(entry)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
-    event = Event(
-        user_id=user.id,
-        title=payload.title.strip(),
-        description=(payload.description or "").strip(),
-        deadline=end_at,
-        status=EventStatus.CONFIRMED,
-    )
-    db.add(event)
-    await db.flush()
-    db.add(EventTiming(event_id=event.id, start_at=start_at, end_at=end_at))
-    now = datetime.now(timezone.utc)
-    for offset in REMINDER_OFFSETS:
-        remind_at = start_at - offset
-        if remind_at > now:
-            db.add(Reminder(
-                event_id=event.id,
-                remind_at=remind_at,
-                status=ReminderStatus.PENDING,
-            ))
-    await db.commit()
-    asyncio.create_task(sync_yandex_interval(
-        event.title, start_at, end_at, event.description or "", event_id=event.id
-    ))
-    return {"id": event.id, "start": start_at.isoformat(), "end": end_at.isoformat()}
+
+@router.patch("/api/v2/events/{event_ref}")
+async def update_interval_event(
+    event_ref: str,
+    payload: IntervalUpdate,
+    user_tg_id: int = Depends(get_miniapp_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        entry = await update_linked_event(
+            db, "telegram", user_tg_id, event_ref,
+            payload.start_at, payload.end_at, payload.title, payload.description,
+            payload.reminders,
+        )
+        return calendar_payload(entry)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/api/v2/events/{event_id}/toggle-complete")
 async def toggle_interval_event(
-    event_id: int,
+    event_id: str,
     user_tg_id: int = Depends(get_miniapp_user_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await current_user(db, user_tg_id)
-    result = await db.execute(
-        select(Event).filter(Event.id == event_id, Event.user_id == user.id)
-    )
-    event = result.scalar_one_or_none()
-    if not event:
-        raise HTTPException(status_code=404, detail="Мероприятие не найдено")
-    event.is_completed = not event.is_completed
-    await db.commit()
-    return {"id": event.id, "is_completed": event.is_completed}
+    try:
+        entry = await toggle_linked_event(db, "telegram", user_tg_id, event_id)
+        return {"id": entry.ref, "is_completed": entry.event.is_completed}
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.delete("/api/v2/events/{event_id}")
 async def delete_interval_event(
-    event_id: int,
+    event_id: str,
     user_tg_id: int = Depends(get_miniapp_user_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await current_user(db, user_tg_id)
-    result = await db.execute(
-        select(Event).filter(Event.id == event_id, Event.user_id == user.id)
-    )
-    event = result.scalar_one_or_none()
-    if not event:
-        raise HTTPException(status_code=404, detail="Мероприятие не найдено")
-    was_confirmed = event.status == EventStatus.CONFIRMED
-    await db.delete(event)
-    await db.commit()
-    if was_confirmed:
-        asyncio.create_task(delete_yandex_interval(event_id))
-    return {"status": "deleted"}
+    try:
+        await delete_linked_event(db, "telegram", user_tg_id, event_id)
+        return {"status": "deleted"}
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error

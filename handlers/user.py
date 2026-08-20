@@ -1,21 +1,11 @@
-from aiogram import Router, F
+from aiogram import Router
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 from repositories import UserRepository
 from config import settings
 
 router = Router()
-
-def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Helper to generate a persistent bottom menu button in the bot."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📅 Календарь дедлайнов")]
-        ],
-        resize_keyboard=True,
-        persistent=True
-    )
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, db_session: AsyncSession):
@@ -25,7 +15,7 @@ async def cmd_start(message: Message, db_session: AsyncSession):
     """
     user_repo = UserRepository(db_session)
     tg_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name
+    profile_name = message.from_user.full_name.strip() or "друг"
     
     # Check if user exists
     db_user = await user_repo.get_by_tg_id(tg_id)
@@ -34,21 +24,21 @@ async def cmd_start(message: Message, db_session: AsyncSession):
         db_user = await user_repo.create(tg_id=tg_id, timezone="Europe/Moscow")
         await db_session.commit()
         greeting = (
-            f"👋 Привет, {username}! Рад приветствовать тебя в ИИ-ассистенте *«планиИруй!»*.\n\n"
+            f"👋 Привет, {profile_name}! Рад приветствовать тебя в ИИ-ассистенте *«планиИруй!»*.\n\n"
             f"Я помогу тебе организовать учебный график и напомню о важных дедлайнах.\n"
             f"Отправь мне текстовое или голосовое сообщение с описанием твоих планов, "
             f"например: *'В среду лекция по физике в 10:00 в 305 аудитории'*.\n\n"
-            f"Используй постоянное меню внизу или ссылки ниже для ручного управления задачами!"
+            f"Используй ссылки ниже для ручного управления задачами!"
         )
     else:
         greeting = (
-            f"👋 С возвращением, {username}!\n\n"
-            f"Готов записать новые события. Отправь мне текстовое или голосовое сообщение или используй постоянное меню."
+            f"👋 С возвращением, {profile_name}!\n\n"
+            f"Готов записать новые события. Отправь мне текстовое или голосовое сообщение."
         )
         
     await message.answer(
         greeting, 
-        reply_markup=get_reply_keyboard(),
+        reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
     # Also send the links as a follow-up with direct, bulletproof Markdown links inside
@@ -62,7 +52,6 @@ async def cmd_start(message: Message, db_session: AsyncSession):
 
 
 @router.message(Command("calendar"))
-@router.message(F.text == "📅 Календарь дедлайнов")
 async def cmd_calendar(message: Message):
     """
     Handles the /calendar command or persistent button clicks.

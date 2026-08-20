@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import pytest
 from sqlalchemy import select
 from database import init_db, async_session_maker
 from models import User, Event, Reminder
@@ -13,6 +14,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("RealPipelineTest")
+pytestmark = pytest.mark.skip(reason="manual integration test requiring production services")
 
 async def test_real():
     print("\n=== STARTING REAL UN-MOCKED END-TO-END PIPELINE TEST ===")

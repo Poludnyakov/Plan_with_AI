@@ -97,6 +97,13 @@
             min-height: 40px;
             margin-bottom: 24px;
         }
+        .login-divider { display:flex; align-items:center; gap:12px; margin:18px 0; color:#9aa0a6; font-size:12px; }
+        .login-divider::before,.login-divider::after { content:""; height:1px; flex:1; background:var(--border-color); }
+        .max-button { width:100%; min-height:46px; border:0; border-radius:12px; background:#7b3ff2; color:#fff; font-weight:700; cursor:pointer; }
+        .max-button:disabled { opacity:.6; }
+        .max-flow { display:none; margin-top:14px; padding:13px; border-radius:12px; background:#f5f3ff; color:#3b2b68; font-size:13px; line-height:1.5; }
+        .max-flow a { display:inline-block; margin-top:8px; color:#6530cf; font-weight:700; }
+        .max-code { font:700 18px ui-monospace,monospace; letter-spacing:2px; }
 
         .footer-text {
             font-size: 12px;
@@ -134,6 +141,9 @@
                     data-auth-url="https://planwithai.ru/api/auth/telegram" 
                     data-request-access="write"></script>
         </div>
+        <div class="login-divider">или</div>
+        <button class="max-button" id="max-login" type="button">Войти через MAX</button>
+        <div class="max-flow" id="max-flow"></div>
         
         <div class="footer-text">
             Нажимая кнопку, вы авторизуетесь через официальный сервис Telegram.
@@ -141,6 +151,42 @@
             Возникли вопросы? <a href="https://t.me/{{ bot_username }}" target="_blank">Перейти к боту</a>
         </div>
     </div>
+
+    <script>
+    (() => {
+        const button = document.getElementById('max-login');
+        const flow = document.getElementById('max-flow');
+        let poll;
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            flow.style.display = 'block';
+            flow.textContent = 'Создаём безопасную ссылку…';
+            try {
+                const response = await fetch('/api/auth/max/start', {method:'POST', credentials:'include'});
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Не удалось начать вход');
+                flow.replaceChildren();
+                const text = document.createElement('div');
+                text.append('Откройте бота MAX и отправьте команду ');
+                const code = document.createElement('span'); code.className = 'max-code'; code.textContent = data.command;
+                text.append(code); flow.append(text);
+                if (data.deep_link) {
+                    const link = document.createElement('a'); link.href = data.deep_link; link.target = '_blank';
+                    link.rel = 'noopener'; link.textContent = 'Открыть бота в MAX'; flow.append(link);
+                }
+                poll = setInterval(async () => {
+                    const status = await fetch(`/api/auth/max/status/${encodeURIComponent(data.token)}`, {credentials:'include'});
+                    if (!status.ok) return;
+                    const result = await status.json();
+                    if (result.status === 'complete') { clearInterval(poll); location.replace(result.redirect); }
+                }, 1800);
+            } catch (error) {
+                flow.textContent = error.message;
+                button.disabled = false;
+            }
+        });
+    })();
+    </script>
 
 </body>
 </html>

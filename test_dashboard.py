@@ -127,6 +127,7 @@ def test_toggle_event_complete_success():
     field in the database and returns a 200 JSON success response.
     """
     client = TestClient(app)
+    client.cookies.set("planiruy_session", sign_tg_id(12345, get_cookie_secret()))
     
     mock_event = Event(
         id=42,
@@ -174,6 +175,7 @@ def test_toggle_event_complete_not_found():
     if the event does not exist.
     """
     client = TestClient(app)
+    client.cookies.set("planiruy_session", sign_tg_id(12345, get_cookie_secret()))
     
     mock_session = MagicMock(spec=AsyncSession)
     mock_event_result = MagicMock()

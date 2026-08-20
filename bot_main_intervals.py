@@ -4,12 +4,12 @@ from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import Bot, Dispatcher
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
-from aiogram.types import BotCommand, MenuButtonWebApp, TelegramObject, WebAppInfo
+from aiogram.types import MenuButtonDefault, TelegramObject
 
 import interval_models  # registers event_timings before create_all
 from config import settings
 from database import async_session_maker, init_db
-from handlers import event_cancellation, miniapp_user, pipeline_handlers, pipeline_handlers_intervals
+from handlers import account, event_cancellation, miniapp_user, pipeline_handlers, pipeline_handlers_intervals
 
 
 logging.basicConfig(level=logging.INFO)
@@ -35,18 +35,12 @@ async def main() -> None:
         raise ValueError("APP_URL must use HTTPS")
     await init_db()
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Запустить ассистента"),
-        BotCommand(command="calendar", description="Открыть календарь"),
-        BotCommand(command="list", description="Открыть расписание"),
-    ])
-    await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
-        text="Календарь",
-        web_app=WebAppInfo(url=f"{settings.APP_URL.rstrip('/')}/miniapp?destination=calendar"),
-    ))
+    await bot.delete_my_commands()
+    await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
     dispatcher = Dispatcher()
     dispatcher.update.outer_middleware(DbSessionMiddleware())
     dispatcher.include_router(miniapp_user.router)
+    dispatcher.include_router(account.router)
     dispatcher.include_router(event_cancellation.router)
     dispatcher.include_router(pipeline_handlers_intervals.router)
     dispatcher.include_router(pipeline_handlers.router)

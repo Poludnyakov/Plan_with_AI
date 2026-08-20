@@ -296,6 +296,7 @@ async def test_delete_event_success():
     commits the database session, and returns success.
     """
     client = TestClient(app)
+    client.cookies.set("planiruy_session", sign_tg_id(12345, get_cookie_secret()))
     
     mock_event = Event(id=42, title="Тестовая задача для удаления")
     
@@ -329,6 +330,7 @@ async def test_delete_event_not_found():
     if the event does not exist.
     """
     client = TestClient(app)
+    client.cookies.set("planiruy_session", sign_tg_id(12345, get_cookie_secret()))
     
     mock_session = MagicMock(spec=AsyncSession)
     mock_result = MagicMock()
@@ -355,6 +357,7 @@ async def test_toggle_event_complete_success():
     toggles the completion state in the DB.
     """
     client = TestClient(app)
+    client.cookies.set("planiruy_session", sign_tg_id(12345, get_cookie_secret()))
     
     mock_event = Event(id=42, title="Тестовая задача", is_completed=False)
     

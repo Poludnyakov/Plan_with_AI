@@ -42,6 +42,8 @@ app = FastAPI(
 # Register the interactive web dashboard router
 from dashboard_router import router as dashboard_router
 app.include_router(dashboard_router)
+from web_calendar_router import router as web_calendar_router
+app.include_router(web_calendar_router)
 
 
 # ==========================================

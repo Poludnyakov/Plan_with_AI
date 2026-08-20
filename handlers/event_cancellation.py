@@ -15,6 +15,7 @@ from interval_ai_service import extract_intervals
 from interval_calendar_sync import delete_yandex_interval
 from interval_models import EventTiming
 from models import Event, EventStatus, User
+from unified_calendar import delete_linked_event, get_owned_entry, list_linked_events
 
 
 logger = logging.getLogger("EventCancellationHandlers")
@@ -97,14 +98,10 @@ def format_candidate(event: Event, timing: EventTiming | None, timezone_name: st
 
 
 async def load_user_events(db: AsyncSession, tg_id: int):
-    result = await db.execute(
-        select(Event, EventTiming, User.timezone)
-        .join(User, User.id == Event.user_id)
-        .outerjoin(EventTiming, EventTiming.event_id == Event.id)
-        .filter(User.tg_id == tg_id)
-        .order_by(Event.deadline.asc())
-    )
-    return list(result.all())
+    entries = await list_linked_events(db, "telegram", tg_id)
+    for entry in entries:
+        entry.event._calendar_ref = entry.ref
+    return [(entry.event, entry.timing, entry.timezone_name) for entry in entries]
 
 
 async def find_cancellation_candidates(query: str, rows):
@@ -155,11 +152,15 @@ async def delete_event_and_answer(
 ) -> None:
     description = format_candidate(event, timing, timezone_name)
     event_id = event.id
-    was_confirmed = event.status == EventStatus.CONFIRMED
-    await db.delete(event)
-    await db.commit()
-    if was_confirmed:
-        asyncio.create_task(delete_yandex_interval(event_id))
+    event_ref = getattr(event, "_calendar_ref", None)
+    if event_ref:
+        await delete_linked_event(db, "telegram", message.from_user.id, event_ref)
+    else:
+        was_confirmed = event.status == EventStatus.CONFIRMED
+        await db.delete(event)
+        await db.commit()
+        if was_confirmed:
+            asyncio.create_task(delete_yandex_interval(event_id))
     await message.answer(f"🗑 Удалено: {description}")
 
 
@@ -197,7 +198,7 @@ async def handle_cancellation_message(message: Message, db_session: AsyncSession
             start = candidate_start(event, timing).astimezone(ZoneInfo(timezone_name))
             builder.button(
                 text=f"🗑 {button_title} · {start:%d.%m %H:%M}",
-                callback_data=f"delete_event:{event.id}",
+                callback_data=f"delete_event:{getattr(event, '_calendar_ref', event.id)}",
             )
         builder.adjust(1)
         if len(candidates) > 8:
@@ -212,24 +213,18 @@ async def handle_cancellation_message(message: Message, db_session: AsyncSession
 @router.callback_query(F.data.startswith("delete_event:"))
 async def handle_delete_event_callback(callback: CallbackQuery, db_session: AsyncSession):
     try:
-        event_id = int(callback.data.split(":", 1)[1])
-        result = await db_session.execute(
-            select(Event, EventTiming, User.timezone)
-            .join(User, User.id == Event.user_id)
-            .outerjoin(EventTiming, EventTiming.event_id == Event.id)
-            .filter(Event.id == event_id, User.tg_id == callback.from_user.id)
+        event_ref = callback.data.split(":", 1)[1]
+        entry = await get_owned_entry(
+            db_session, "telegram", callback.from_user.id, event_ref
         )
-        row = result.first()
-        if not row:
+        if not entry:
             await callback.answer("Событие уже удалено или не найдено.", show_alert=True)
             return
-        event, timing, timezone_name = row
+        event, timing, timezone_name = entry.event, entry.timing, entry.timezone_name
         description = format_candidate(event, timing, timezone_name)
-        was_confirmed = event.status == EventStatus.CONFIRMED
-        await db_session.delete(event)
-        await db_session.commit()
-        if was_confirmed:
-            asyncio.create_task(delete_yandex_interval(event_id))
+        await delete_linked_event(
+            db_session, "telegram", callback.from_user.id, event_ref
+        )
         await callback.answer("🗑 Удалено")
         if callback.message:
             await callback.message.edit_text(f"🗑 Удалено: {description}")

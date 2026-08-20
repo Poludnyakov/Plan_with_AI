@@ -29,9 +29,29 @@ def test_timeline_template_is_dependency_free():
         response = client.get("/mini-timeline")
         assert response.status_code == 200
         assert 'id="timeline"' in response.text
+        assert '<div class="calendar-brand"><span id="dateLabel"></span></div>' in response.text
+        assert '<div class="calendar-brand"><strong>' not in response.text
         assert 'id="start-at"' in response.text
         assert 'id="end-at"' in response.text
         assert "/api/v2/events" in response.text
         assert "fullcalendar" not in response.text.lower()
+        assert 'id="addEventButton"' in response.text
+        assert 'id="editTitle"' in response.text
+        assert 'id="editStart"' in response.text
+        assert 'id="editEnd"' in response.text
+        assert 'data-resize="start"' not in response.text
+        assert 'data-resize="end"' not in response.text
+        assert "state.selectedEventId!==eventId(event)" in response.text
+        assert "Math.abs(distance)<10" in response.text
+        assert "drag-origin" in response.text
+        assert "emptySlotClick" in response.text
+        assert "openCreate(atMinute(state.date,hour*60))" in response.text
+        assert 'placeholder="Новое событие"' in response.text
+        assert 'placeholder="Детали"' in response.text
+        assert 'id="createReminders"' in response.text
+        assert 'id="editReminders"' in response.text
+        assert "collectReminderTimes" in response.text
+        assert "Событие выделено" not in response.text
+        assert "Нажмите ещё раз" not in response.text
     finally:
         app.dependency_overrides.clear()

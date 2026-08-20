@@ -42,4 +42,5 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # Import models here to register them with Base.metadata before creation
         import models  # noqa: F401
+        import account_models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)

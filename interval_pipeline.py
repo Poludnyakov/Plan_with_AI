@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anonymizer import DataAnonymizer
+from account_service import intelligent_reminders_enabled
+from intelligent_reminders import build_reminders
 from interval_ai_service import extract_intervals
 from interval_models import EventTiming
 from models import Event, EventStatus, ReminderStatus
@@ -49,6 +51,9 @@ class IntervalActionPipelineService:
         if not user:
             user = await user_repo.create(user_tg_id, "Europe/Moscow")
             await db_session.flush()
+        smart_enabled = await intelligent_reminders_enabled(
+            db_session, "telegram", user_tg_id
+        )
 
         created = []
         now = datetime.now(timezone.utc)
@@ -68,14 +73,15 @@ class IntervalActionPipelineService:
             await db_session.flush()
             db_session.add(EventTiming(event_id=event.id, start_at=start_at, end_at=end_at))
 
-            for offset in REMINDER_OFFSETS:
-                remind_at = start_at - offset
-                if remind_at > now:
-                    await reminder_repo.create(
-                        event_id=event.id,
-                        remind_at=remind_at,
-                        status=ReminderStatus.PENDING,
-                    )
+            reminder_times = await build_reminders(
+                smart_enabled, event.title, event.description or "",
+                start_at, end_at, user.timezone, now,
+            )
+            for remind_at in reminder_times:
+                await reminder_repo.create(
+                    event_id=event.id, remind_at=remind_at,
+                    status=ReminderStatus.PENDING,
+                )
             created.append(event)
 
         await db_session.commit()

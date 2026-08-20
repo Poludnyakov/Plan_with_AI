@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>планиИруй! — календарь</title>
+<style>
+:root {
+  --bg:#f3f5f9; --surface:#fff; --text:#182033; --muted:#707889;
+  --line:#e4e8ef; --primary:#3478f6; --primary-soft:#e8f0ff;
+  --event:#dceaff; --event-text:#17477f; --danger:#be322c; --hour:60px;
+}
+* { box-sizing:border-box; }
+html,body { width:100%; height:100%; margin:0; overflow:hidden; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,textarea { font:inherit; }
+button { -webkit-tap-highlight-color:transparent; }
+.calendar-shell {
+  width:min(100%,1000px); height:100vh; height:100dvh; margin:auto;
+  display:grid; grid-template-rows:auto auto minmax(0,1fr) auto;
+  background:var(--surface); overflow:hidden;
+}
+.calendar-header {
+  min-height:62px; padding:9px 12px 9px max(12px,env(safe-area-inset-left));
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  border-bottom:1px solid var(--line); background:var(--surface); z-index:10;
+}
+.calendar-brand { min-width:0; }
+.calendar-brand span {
+  display:block; max-width:52vw; overflow:hidden;
+  color:var(--text); font-size:16px; font-weight:750; text-overflow:ellipsis;
+  white-space:nowrap; text-transform:capitalize;
+}
+.header-actions { display:flex; align-items:center; gap:7px; flex:none; }
+.header-button {
+  min-height:40px; border:0; border-radius:12px; padding:0 12px;
+  font-weight:750; cursor:pointer;
+}
+.header-button.today {
+  background:#e8eef8; color:#26344d; white-space:nowrap;
+  box-shadow:inset 0 0 0 1px #dce3ee;
+}
+.header-button.add { background:var(--primary); color:#fff; box-shadow:0 4px 12px #2563eb2e; }
+.weeks {
+  display:flex; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none;
+  overscroll-behavior-x:contain; touch-action:pan-x; border-bottom:1px solid var(--line);
+  background:var(--surface);
+}
+.weeks::-webkit-scrollbar { display:none; }
+.week-page {
+  flex:0 0 100%; padding:7px 7px 8px; display:grid;
+  grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; scroll-snap-align:center;
+}
+.week-day {
+  height:55px; min-width:0; border:0; border-radius:13px; background:transparent;
+  color:var(--text); display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:2px; cursor:pointer;
+}
+.week-day-name { color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; }
+.week-day-number {
+  width:29px; height:29px; border-radius:50%; display:grid; place-items:center;
+  font-size:13px; font-weight:750;
+}
+.week-day.today-day .week-day-number { color:var(--primary); }
+.week-day.selected .week-day-number { background:var(--primary); color:#fff; }
+.week-day.has-events::after { content:""; width:4px; height:4px; border-radius:50%; background:var(--primary); }
+.calendar-content { min-height:0; position:relative; overflow:hidden; }
+.timeline-scroll,.agenda-scroll {
+  width:100%; height:100%; overflow-y:auto; overscroll-behavior:contain; background:var(--surface);
+}
+.timeline { position:relative; height:calc(var(--hour) * 24); min-height:calc(var(--hour) * 24); }
+.hour-row {
+  position:absolute; left:0; right:0; height:var(--hour);
+  border-top:1px solid var(--line); pointer-events:none;
+}
+.hour-label {
+  position:absolute; top:-7px; left:4px; width:43px; padding-right:5px;
+  background:var(--surface); color:var(--muted); font-size:10px; text-align:right;
+}
+.events-layer { position:absolute; top:0; bottom:0; left:53px; right:8px; }
+.calendar-event {
+  position:absolute; min-height:25px; padding:7px 9px;
+  border:0; border-left:4px solid var(--primary); border-radius:8px;
+  background:var(--event); color:var(--event-text); overflow:hidden;
+  text-align:left; user-select:none; touch-action:pan-y; cursor:pointer;
+  box-shadow:0 1px 2px #1d4ed81c; transition:box-shadow .15s,filter .15s;
+}
+.calendar-event.done { border-color:#258754; background:#e4f4e9; color:#17613e; opacity:.7; }
+.calendar-event.selected {
+  z-index:12; outline:3px solid #3478f64d; box-shadow:0 6px 20px #1d4ed835;
+  touch-action:none; cursor:grab; overflow:visible;
+}
+.calendar-event.dragging { z-index:20; cursor:grabbing; opacity:.9; transition:none; }
+.calendar-event.drag-origin {
+  z-index:1; opacity:.28; pointer-events:none; filter:grayscale(.35);
+  box-shadow:none; outline:0;
+}
+.calendar-event.saving { cursor:wait; }
+.event-title {
+  display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:12px; line-height:1.2; font-weight:800;
+}
+.event-time { display:block; margin-top:2px; font-size:10px; font-variant-numeric:tabular-nums; }
+.now-line { position:absolute; left:46px; right:0; z-index:4; height:2px; background:#e5484d; pointer-events:none; }
+.now-line::before { content:""; position:absolute; left:-4px; top:-3px; width:8px; height:8px; border-radius:50%; background:#e5484d; }
+.empty-state {
+  position:sticky; top:18px; width:max-content; max-width:calc(100% - 75px);
+  margin:18px 14px 0 auto; padding:9px 12px; border:1px solid var(--line);
+  border-radius:11px; background:var(--surface); color:var(--muted); font-size:12px;
+  pointer-events:none;
+}
+.agenda-scroll { padding:8px 11px 22px; }
+.agenda-date { margin:15px 4px 6px; color:var(--muted); font-size:11px; text-transform:uppercase; }
+.agenda-event {
+  width:100%; display:grid; grid-template-columns:76px 4px minmax(0,1fr);
+  gap:10px; padding:11px 8px; border:0; border-radius:12px;
+  background:transparent; color:var(--text); text-align:left; cursor:pointer;
+}
+.agenda-event.selected { background:var(--primary-soft); outline:2px solid #3478f633; }
+.agenda-time { color:var(--muted); font-size:12px; white-space:pre-line; font-variant-numeric:tabular-nums; }
+.agenda-mark { border-radius:8px; background:var(--primary); }
+.agenda-title { display:block; font-size:14px; font-weight:760; }
+.agenda-description { margin-top:3px; color:var(--muted); font-size:12px; }
+.view-switcher {
+  position:relative; z-index:15; min-height:calc(62px + env(safe-area-inset-bottom));
+  padding:0 8px env(safe-area-inset-bottom); display:grid; grid-template-columns:1fr 1fr;
+  border-top:1px solid var(--line); background:var(--surface);
+  box-shadow:0 -3px 12px #1118270a;
+}
+.view-button {
+  min-width:0; border:0; border-radius:12px; margin:6px 3px;
+  background:transparent; color:var(--muted); font-size:12px; font-weight:750; cursor:pointer;
+}
+.view-button span { display:block; margin-bottom:2px; font-size:19px; line-height:20px; }
+.view-button.active { background:var(--primary-soft); color:var(--primary); }
+.modal-backdrop {
+  position:fixed; inset:0; z-index:50; display:none; align-items:flex-end;
+  justify-content:center; background:#10182870;
+}
+.modal-backdrop.open { display:flex; }
+.modal-sheet {
+  width:100%; max-height:92dvh; overflow:auto; padding:10px 17px calc(18px + env(safe-area-inset-bottom));
+  border-radius:23px 23px 0 0; background:#fff; color:#202636;
+}
+.modal-handle { width:38px; height:4px; margin:0 auto 13px; border-radius:8px; background:#d4d8df; }
+.modal-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.modal-head h2 { margin:0; font-size:20px; }
+.modal-close { width:40px; height:40px; border:0; border-radius:50%; background:#eff1f5; font-size:22px; cursor:pointer; }
+.field { margin-top:13px; }
+.field label { display:block; margin-bottom:6px; color:#697183; font-size:12px; font-weight:700; }
+.field input,.field textarea {
+  width:100%; min-height:47px; padding:11px 12px; border:1px solid #d8dde6;
+  border-radius:11px; background:#fff; color:#202636; outline:0;
+}
+.field textarea { min-height:76px; resize:vertical; }
+.field input:focus,.field textarea:focus { border-color:var(--primary); box-shadow:0 0 0 3px #3478f61f; }
+.reminder-list { display:grid; gap:8px; }
+.reminder-row { display:grid; grid-template-columns:minmax(0,1fr) 42px; gap:7px; }
+.reminder-row select,.reminder-row input {
+  width:100%; min-height:44px; padding:9px 11px; border:1px solid #d8dde6;
+  border-radius:11px; background:#fff; color:#202636;
+}
+.reminder-row input { grid-column:1; }
+.reminder-remove {
+  grid-column:2; grid-row:1; border:0; border-radius:11px;
+  background:#f3f4f7; color:#697183; font-size:20px; cursor:pointer;
+}
+.reminder-add {
+  min-height:40px; margin-top:8px; padding:0 12px; border:0; border-radius:10px;
+  background:var(--primary-soft); color:var(--primary); font-weight:750; cursor:pointer;
+}
+.reminder-note { margin:7px 0 0; color:var(--muted); font-size:11px; }
+.modal-error { display:none; margin:11px 0 0; color:var(--danger); font-size:13px; }
+.modal-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+.action-button { min-height:46px; padding:0 14px; border:0; border-radius:12px; font-weight:760; cursor:pointer; }
+.action-button.primary { flex:1; min-width:130px; background:var(--primary); color:#fff; }
+.action-button.secondary { background:#eef1f5; color:#394152; }
+.action-button.danger { background:#fde9e7; color:var(--danger); }
+.action-button:disabled { opacity:.55; }
+.toast {
+  position:fixed; z-index:80; left:50%; bottom:calc(75px + env(safe-area-inset-bottom));
+  max-width:calc(100% - 28px); padding:11px 15px; border-radius:11px;
+  background:#202636; color:#fff; font-size:13px; text-align:center;
+  opacity:0; transform:translate(-50%,14px); pointer-events:none; transition:.18s;
+}
+.toast.show { opacity:1; transform:translate(-50%,0); }
+@media (max-width:390px) {
+  .header-button { padding:0 10px; }
+  .add-label { display:none; }
+  .calendar-brand span { max-width:34vw; }
+}
+@media (min-width:760px) {
+  .calendar-shell { border-inline:1px solid var(--line); }
+  .modal-backdrop { align-items:center; padding:24px; }
+  .modal-sheet { max-width:540px; border-radius:23px; padding:14px 23px 23px; }
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#11151b; --surface:#191e26; --text:#eef1f6; --muted:#a9b0bd; --line:#303743; --event:#17345a; --event-text:#dceaff; --primary-soft:#203451; }
+  .modal-sheet { background:#20252e; color:#f0f2f6; }
+  .field input,.field textarea,.reminder-row select,.reminder-row input { background:#292f39; border-color:#4a5261; color:#fff; }
+  .modal-close,.action-button.secondary { background:#323944; color:#fff; }
+}
+</style>
+</head>
+<body>
+<div class="calendar-shell">
+  <header class="calendar-header">
+    <div class="calendar-brand"><span id="dateLabel"></span></div>
+    <div class="header-actions">
+      <button class="header-button today" id="todayButton" type="button">Сегодня</button>
+      <button class="header-button add" id="addEventButton" type="button">＋ <span class="add-label">Добавить</span></button>
+    </div>
+  </header>
+  <div class="weeks" id="weeks" aria-label="Листайте недели"></div>
+  <main class="calendar-content">
+    <div class="timeline-scroll" id="timelineScroll"><div class="timeline" id="timeline"></div></div>
+    <div class="agenda-scroll" id="agendaScroll" hidden></div>
+  </main>
+  <nav class="view-switcher" aria-label="Вид календаря">
+    <button class="view-button active" type="button" data-calendar-view="timeline"><span>▥</span>День</button>
+    <button class="view-button" type="button" data-calendar-view="agenda"><span>☷</span>Расписание</button>
+  </nav>
+</div>
+
+<div class="modal-backdrop" id="createModal">
+  <section class="modal-sheet" role="dialog" aria-modal="true">
+    <div class="modal-handle"></div>
+    <div class="modal-head"><h2>Новое мероприятие</h2><button class="modal-close" type="button" data-close-modal="createModal">×</button></div>
+    <form id="createForm">
+      <div class="field"><label for="title">Название</label><input id="title" maxlength="255" required placeholder="Новое событие"></div>
+      <div class="field"><label for="start-at">Начало</label><input id="start-at" type="datetime-local" required></div>
+      <div class="field"><label for="end-at">Окончание</label><input id="end-at" type="datetime-local" required></div>
+      <div class="field"><label for="description">Описание</label><textarea id="description" placeholder="Детали"></textarea></div>
+      <div class="field">
+        <label>Уведомления</label>
+        <div class="reminder-list" id="createReminders"></div>
+        <button class="reminder-add" type="button" data-add-reminder="createReminders">＋ Добавить уведомление</button>
+        <p class="reminder-note">Если ничего не добавлять, время выберет умная система.</p>
+      </div>
+      <p class="modal-error" id="createError"></p>
+      <div class="modal-actions">
+        <button class="action-button secondary" type="button" data-close-modal="createModal">Отмена</button>
+        <button class="action-button primary" id="createSave" type="submit">Сохранить</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<div class="modal-backdrop" id="editModal">
+  <section class="modal-sheet" role="dialog" aria-modal="true">
+    <div class="modal-handle"></div>
+    <div class="modal-head"><h2>Изменить мероприятие</h2><button class="modal-close" type="button" data-close-modal="editModal">×</button></div>
+    <form id="editForm">
+      <div class="field"><label for="editTitle">Название</label><input id="editTitle" maxlength="255" required></div>
+      <div class="field"><label for="editStart">Начало</label><input id="editStart" type="datetime-local" required></div>
+      <div class="field"><label for="editEnd">Окончание</label><input id="editEnd" type="datetime-local" required></div>
+      <div class="field"><label for="editDescription">Описание</label><textarea id="editDescription"></textarea></div>
+      <div class="field">
+        <label>Уведомления</label>
+        <div class="reminder-list" id="editReminders"></div>
+        <button class="reminder-add" type="button" data-add-reminder="editReminders">＋ Добавить уведомление</button>
+        <p class="reminder-note">Можно добавить несколько уведомлений или удалить их все.</p>
+      </div>
+      <p class="modal-error" id="editError"></p>
+      <div class="modal-actions">
+        <button class="action-button danger" id="deleteEvent" type="button">Удалить</button>
+        <button class="action-button secondary" id="completeEvent" type="button">Выполнено</button>
+        <button class="action-button primary" id="editSave" type="submit">Сохранить</button>
+      </div>
+    </form>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+  const CONFIG = {{ calendar_config | default({'apiBase':'/api/v2/events','reauthUrl':'/miniapp?destination=calendar','tokenKey':'planiruy_access_token','platform':'telegram'}) | tojson }};
+  const HOUR_HEIGHT = 60, SNAP_MINUTES = 15, MIN_DURATION = 15;
+  const byId = id => document.getElementById(id);
+  const state = {
+    date: dayStart(new Date()), events: [], selectedEventId: null, activeEvent: null,
+    view: new URLSearchParams(location.search).get('view') === 'agenda' ? 'agenda' : 'timeline',
+    centeringWeeks: false,
+  };
+  const dayFormat = new Intl.DateTimeFormat('ru-RU', {weekday:'long',day:'numeric',month:'long'});
+  const shortDayFormat = new Intl.DateTimeFormat('ru-RU', {weekday:'short'});
+  const timeFormat = new Intl.DateTimeFormat('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  const eventId = event => String(event.id);
+  const eventStart = event => new Date(event.start);
+  const eventEnd = event => new Date(event.end);
+  function dayStart(date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
+  function addDays(date, count) { const result=new Date(date); result.setDate(result.getDate()+count); return result; }
+  function monday(date) { const result=dayStart(date); result.setDate(result.getDate()-((result.getDay()+6)%7)); return result; }
+  function dayKey(date) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; }
+  function sameDay(left,right) { return dayKey(left) === dayKey(right); }
+  function minuteOfDay(date) { return date.getHours()*60+date.getMinutes(); }
+  function atMinute(date, minutes) { const result=dayStart(date); result.setMinutes(minutes); return result; }
+  function capitalize(value) { return value ? value[0].toUpperCase()+value.slice(1) : ''; }
+  function inputValue(date) {
+    const pad=value=>String(value).padStart(2,'0');
+    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  const REMINDER_PRESETS=[
+    [0,'В момент начала'],[5,'За 5 минут'],[10,'За 10 минут'],[15,'За 15 минут'],
+    [30,'За 30 минут'],[60,'За 1 час'],[120,'За 2 часа'],[1440,'За 1 день'],
+    [2880,'За 2 дня'],[10080,'За 1 неделю']
+  ];
+  function reminderRow(start,reminder=null) {
+    const row=document.createElement('div'); row.className='reminder-row';
+    const select=document.createElement('select'); select.setAttribute('aria-label','Когда напомнить');
+    REMINDER_PRESETS.forEach(([minutes,label])=>{
+      const option=document.createElement('option'); option.value=String(minutes); option.textContent=label; select.append(option);
+    });
+    const customOption=document.createElement('option'); customOption.value='custom'; customOption.textContent='Выбрать дату и время'; select.append(customOption);
+    const custom=document.createElement('input'); custom.type='datetime-local'; custom.setAttribute('aria-label','Дата и время уведомления');
+    if(reminder) {
+      const date=new Date(reminder), offset=Math.round((start-date)/60000);
+      if(REMINDER_PRESETS.some(([minutes])=>minutes===offset)) select.value=String(offset);
+      else { select.value='custom'; custom.value=inputValue(date); }
+    } else select.value='30';
+    custom.hidden=select.value!=='custom';
+    select.onchange=()=>{
+      custom.hidden=select.value!=='custom';
+      if(!custom.hidden&&!custom.value) custom.value=inputValue(new Date(start.getTime()-30*60000));
+    };
+    const remove=document.createElement('button'); remove.type='button'; remove.className='reminder-remove';
+    remove.textContent='×'; remove.setAttribute('aria-label','Удалить уведомление'); remove.onclick=()=>row.remove();
+    row.append(select,custom,remove); return row;
+  }
+  function renderReminderEditor(containerId,start,reminders,mode='manual') {
+    const container=byId(containerId); container.replaceChildren(); container.dataset.mode=mode;
+    (reminders||[]).forEach(reminder=>container.append(reminderRow(start,reminder)));
+  }
+  function collectReminderTimes(containerId,start) {
+    const container=byId(containerId);
+    if(container.dataset.mode==='auto') return null;
+    const values=[...container.querySelectorAll('.reminder-row')].map(row=>{
+      const select=row.querySelector('select');
+      if(select.value==='custom') {
+        const date=new Date(row.querySelector('input').value);
+        if(Number.isNaN(date.getTime())) throw new Error('Укажите дату и время уведомления');
+        if(date>start) throw new Error('Уведомление должно быть не позже начала мероприятия');
+        return date.toISOString();
+      }
+      return new Date(start.getTime()-Number(select.value)*60000).toISOString();
+    });
+    return [...new Set(values)];
+  }
+  function renderWeeks() {
+    const viewport=byId('weeks'), base=monday(state.date), today=dayStart(new Date());
+    viewport.replaceChildren();
+    [-7,0,7].forEach(offset => {
+      const page=document.createElement('div'); page.className='week-page';
+      for(let index=0; index<7; index++) {
+        const date=addDays(base,offset+index), button=document.createElement('button');
+        button.type='button'; button.className='week-day';
+        if(sameDay(date,today)) button.classList.add('today-day');
+        if(sameDay(date,state.date)) button.classList.add('selected');
+        if(state.events.some(event=>sameDay(eventStart(event),date))) button.classList.add('has-events');
+        const name=document.createElement('span'); name.className='week-day-name'; name.textContent=shortDayFormat.format(date).replace('.','');
+        const number=document.createElement('span'); number.className='week-day-number'; number.textContent=date.getDate();
+        button.append(name,number);
+        button.onclick=()=>{ state.date=dayStart(date); state.selectedEventId=null; render(); scrollToRelevantTime(); };
+        page.append(button);
+      }
+      viewport.append(page);
+    });
+    byId('dateLabel').textContent=capitalize(dayFormat.format(state.date));
+    requestAnimationFrame(()=>{
+      state.centeringWeeks=true; viewport.scrollLeft=viewport.clientWidth;
+      requestAnimationFrame(()=>{ state.centeringWeeks=false; });
+    });
+  }
+  let weekScrollTimer;
+  byId('weeks').addEventListener('scroll',()=>{
+    if(state.centeringWeeks) return;
+    clearTimeout(weekScrollTimer);
+    weekScrollTimer=setTimeout(()=>{
+      const viewport=byId('weeks'), page=Math.round(viewport.scrollLeft/Math.max(1,viewport.clientWidth));
+      if(page===1) return;
+      state.date=addDays(state.date,page===0?-7:7); state.selectedEventId=null;
+      render(); scrollToRelevantTime();
+    },120);
+  });
+  function eventsForSelectedDay() {
+    return state.events.filter(event=>sameDay(eventStart(event),state.date)).sort((a,b)=>eventStart(a)-eventStart(b));
+  }
+  function layoutEvents(events) {
+    let group=[], groupEnd=null;
+    const finishGroup=()=>{
+      if(!group.length) return;
+      const active=[]; let columns=1;
+      group.forEach(event=>{
+        for(let index=active.length-1;index>=0;index--) {
+          if(eventEnd(active[index].event)<=eventStart(event)) active.splice(index,1);
+        }
+        const used=new Set(active.map(item=>item.column)); let column=0;
+        while(used.has(column)) column++;
+        event._column=column; active.push({event,column}); columns=Math.max(columns,column+1);
+      });
+      group.forEach(event=>{event._columns=columns;}); group=[]; groupEnd=null;
+    };
+    events.forEach(event=>{
+      if(group.length && eventStart(event)>=groupEnd) finishGroup();
+      group.push(event);
+      if(!groupEnd || eventEnd(event)>groupEnd) groupEnd=eventEnd(event);
+    });
+    finishGroup();
+    return events;
+  }
+  function applyGeometry(node,start,end) {
+    const top=Math.max(0,minuteOfDay(start)/60*HOUR_HEIGHT);
+    const duration=Math.max(MIN_DURATION,(end-start)/60000);
+    node.style.top=`${top}px`; node.style.height=`${Math.max(25,duration/60*HOUR_HEIGHT-2)}px`;
+    node.querySelector('.event-time').textContent=`${timeFormat.format(start)}–${timeFormat.format(end)}`;
+  }
+  function selectEvent(event) {
+    state.selectedEventId=eventId(event); renderTimeline(); renderAgenda();
+  }
+  function makeEventNode(event) {
+    const node=document.createElement('div'), selected=state.selectedEventId===eventId(event);
+    node.className='calendar-event'+(event.is_completed?' done':'')+(selected?' selected':'');
+    node.style.left=`calc(${event._column/event._columns*100}% + 2px)`;
+    node.style.width=`calc(${100/event._columns}% - 4px)`;
+    node.innerHTML='<span class="event-title"></span><span class="event-time"></span>';
+    node.querySelector('.event-title').textContent=event.title;
+    applyGeometry(node,eventStart(event),eventEnd(event));
+    bindDrag(node,event);
+    node.addEventListener('click',()=>{
+      if(node.dataset.dragged==='1') { delete node.dataset.dragged; return; }
+      if(state.selectedEventId!==eventId(event)) { selectEvent(event); return; }
+      openEditor(event);
+    });
+    return node;
+  }
+  function bindDrag(node,event) {
+    node.addEventListener('pointerdown',down=>{
+      if(state.selectedEventId!==eventId(event)) return;
+      if(down.button!==undefined && down.button!==0) return;
+      const originY=down.clientY, originalStart=eventStart(event), originalEnd=eventEnd(event);
+      let start=new Date(originalStart), end=new Date(originalEnd), moved=false, finished=false, ghost=null;
+      node.setPointerCapture(down.pointerId);
+      const move=motion=>{
+        const distance=motion.clientY-originY;
+        if(!moved && Math.abs(distance)<10) return;
+        if(!moved) {
+          moved=true;
+          ghost=node.cloneNode(true); ghost.classList.remove('selected'); ghost.classList.add('drag-origin');
+          node.parentElement.insertBefore(ghost,node); node.classList.add('dragging');
+        }
+        const delta=Math.round((distance/HOUR_HEIGHT*60)/SNAP_MINUTES)*SNAP_MINUTES;
+        const duration=(originalEnd-originalStart)/60000;
+        let next=minuteOfDay(originalStart)+delta;
+        next=Math.max(0,Math.min(1440-duration,next));
+        start=atMinute(state.date,next); end=atMinute(state.date,next+duration);
+        applyGeometry(node,start,end);
+      };
+      const cleanup=()=>{
+        node.removeEventListener('pointermove',move);
+        node.removeEventListener('pointerup',save);
+        node.removeEventListener('pointercancel',cancel);
+        node.classList.remove('dragging');
+      };
+      const removeGhost=()=>{ if(ghost){ghost.remove();ghost=null;} };
+      const cancel=()=>{ if(finished)return; finished=true; cleanup(); removeGhost(); applyGeometry(node,originalStart,originalEnd); };
+      const save=async()=>{
+        if(finished)return; finished=true; cleanup();
+        if(!moved) return;
+        node.dataset.dragged='1'; node.classList.add('saving');
+        try {
+          const shift=start-originalStart;
+          const reminders=(event.reminders||[]).map(value=>new Date(new Date(value).getTime()+shift).toISOString());
+          await api(`${CONFIG.apiBase}/${encodeURIComponent(event.id)}`,{
+            method:'PATCH',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({start_at:start.toISOString(),end_at:end.toISOString(),reminders})
+          });
+          event.start=start.toISOString(); event.end=end.toISOString(); event.reminders=reminders;
+          removeGhost(); toast('Время сохранено'); await loadEvents(false);
+        } catch(error) {
+          removeGhost(); node.classList.remove('saving'); applyGeometry(node,originalStart,originalEnd); toast(error.message);
+        }
+      };
+      node.addEventListener('pointermove',move);
+      node.addEventListener('pointerup',save);
+      node.addEventListener('pointercancel',cancel);
+      down.preventDefault();
+    });
+  }
+  let lastEmptyTap={key:'',at:0};
+  function emptySlotClick(event,layer) {
+    if(event.target!==layer) return;
+    const rect=layer.getBoundingClientRect();
+    const hour=Math.max(0,Math.min(23,Math.floor((event.clientY-rect.top)/HOUR_HEIGHT)));
+    const key=`${dayKey(state.date)}:${hour}`, now=Date.now();
+    const doubleTap=(event.detail>=2)||(lastEmptyTap.key===key && now-lastEmptyTap.at<550);
+    if(doubleTap) {
+      lastEmptyTap={key:'',at:0}; state.selectedEventId=null;
+      openCreate(atMinute(state.date,hour*60)); return;
+    }
+    lastEmptyTap={key,at:now};
+    if(state.selectedEventId!==null) { state.selectedEventId=null; renderTimeline(); renderAgenda(); }
+  }
+  function renderTimeline() {
+    const root=byId('timeline'); root.replaceChildren();
+    for(let hour=0;hour<24;hour++) {
+      const row=document.createElement('div'); row.className='hour-row'; row.style.top=`${hour*HOUR_HEIGHT}px`;
+      const label=document.createElement('span'); label.className='hour-label'; label.textContent=`${String(hour).padStart(2,'0')}:00`;
+      row.append(label); root.append(row);
+    }
+    const layer=document.createElement('div'); layer.className='events-layer';
+    const events=layoutEvents(eventsForSelectedDay());
+    events.forEach(event=>layer.append(makeEventNode(event)));
+    layer.addEventListener('click',event=>emptySlotClick(event,layer));
+    root.append(layer);
+    if(sameDay(state.date,new Date())) {
+      const line=document.createElement('div'); line.className='now-line';
+      line.style.top=`${minuteOfDay(new Date())/60*HOUR_HEIGHT}px`; root.append(line);
+    }
+    if(!events.length) {
+      const empty=document.createElement('div'); empty.className='empty-state';
+      empty.textContent='На этот день ничего не запланировано'; root.append(empty);
+    }
+  }
+  function agendaNode(event) {
+    const button=document.createElement('button'); button.type='button';
+    button.className='agenda-event'+(state.selectedEventId===eventId(event)?' selected':'');
+    button.innerHTML='<span class="agenda-time"></span><span class="agenda-mark"></span><span><b class="agenda-title"></b><span class="agenda-description"></span></span>';
+    button.querySelector('.agenda-time').textContent=`${timeFormat.format(eventStart(event))}\n${timeFormat.format(eventEnd(event))}`;
+    button.querySelector('.agenda-title').textContent=event.title;
+    button.querySelector('.agenda-description').textContent=event.description||'';
+    button.onclick=()=>{
+      if(state.selectedEventId!==eventId(event)) { state.selectedEventId=eventId(event); renderAgenda(); }
+      else openEditor(event);
+    };
+    return button;
+  }
+  function renderAgenda() {
+    const root=byId('agendaScroll'); root.replaceChildren(); let previous='';
+    [...state.events].sort((a,b)=>eventStart(a)-eventStart(b)).forEach(event=>{
+      const current=dayKey(eventStart(event));
+      if(current!==previous) {
+        const heading=document.createElement('h3'); heading.className='agenda-date';
+        heading.textContent=capitalize(dayFormat.format(eventStart(event))); root.append(heading); previous=current;
+      }
+      root.append(agendaNode(event));
+    });
+    if(!state.events.length) {
+      const empty=document.createElement('p'); empty.className='empty-state'; empty.textContent='Расписание пока пустое'; root.append(empty);
+    }
+  }
+  function updateView() {
+    const timelineMode=state.view==='timeline';
+    byId('timelineScroll').hidden=!timelineMode; byId('agendaScroll').hidden=timelineMode;
+    document.querySelectorAll('[data-calendar-view]').forEach(button=>button.classList.toggle('active',button.dataset.calendarView===state.view));
+  }
+  function render() { renderWeeks(); renderTimeline(); renderAgenda(); updateView(); }
+  function scrollToRelevantTime() {
+    if(state.view!=='timeline') return;
+    const events=eventsForSelectedDay(), now=new Date();
+    const minutes=sameDay(state.date,now)?minuteOfDay(now):(events.length?minuteOfDay(eventStart(events[0])):8*60);
+    requestAnimationFrame(()=>{byId('timelineScroll').scrollTop=Math.max(0,minutes/60*HOUR_HEIGHT-150);});
+  }
+  function requestOptions(options={}) {
+    const headers={...(options.headers||{})};
+    try {
+      if(CONFIG.tokenKey) {
+        const token=sessionStorage.getItem(CONFIG.tokenKey);
+        if(token) headers.Authorization=`Bearer ${token}`;
+      }
+    } catch(_) {}
+    return {...options,headers,credentials:'include'};
+  }
+  async function authenticatedFetch(url,options={}) { return fetch(url,requestOptions(options)); }
+  async function api(url,options={}) {
+    const response=await authenticatedFetch(url,options);
+    if(response.status===401) { location.replace(CONFIG.reauthUrl); throw new Error('Нужно войти снова'); }
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok) throw new Error(data.detail||'Не удалось выполнить действие');
+    return data;
+  }
+  async function loadEvents(scroll=true) {
+    try {
+      state.events=await api(CONFIG.apiBase);
+      if(state.selectedEventId && !state.events.some(event=>eventId(event)===state.selectedEventId)) state.selectedEventId=null;
+      render(); if(scroll) scrollToRelevantTime();
+    } catch(error) { toast(error.message); }
+  }
+  function openModal(id) { byId(id).classList.add('open'); }
+  function closeModal(id) { byId(id).classList.remove('open'); }
+  function showError(id,message) { const node=byId(id); node.textContent=message; node.style.display='block'; }
+  function hideError(id) { byId(id).style.display='none'; }
+  function openCreate(slotStart=null) {
+    const start=slotStart?new Date(slotStart):new Date(state.date), now=new Date();
+    if(!slotStart) {
+      if(sameDay(start,now)) start.setHours(now.getHours()+1,0,0,0); else start.setHours(9,0,0,0);
+    }
+    const end=new Date(start.getTime()+3600000);
+    byId('title').value=''; byId('description').value='';
+    byId('start-at').value=inputValue(start); byId('end-at').value=inputValue(end);
+    renderReminderEditor('createReminders',start,[],'auto');
+    hideError('createError'); openModal('createModal');
+  }
+  function openEditor(event) {
+    state.activeEvent=event;
+    byId('editTitle').value=event.title; byId('editDescription').value=event.description||'';
+    byId('editStart').value=inputValue(eventStart(event)); byId('editEnd').value=inputValue(eventEnd(event));
+    renderReminderEditor('editReminders',eventStart(event),event.reminders||[],'manual');
+    byId('completeEvent').textContent=event.is_completed?'Вернуть в работу':'Выполнено';
+    hideError('editError'); openModal('editModal');
+  }
+  byId('createForm').onsubmit=async submit=>{
+    submit.preventDefault(); const save=byId('createSave'); save.disabled=true; hideError('createError');
+    try {
+      const start=new Date(byId('start-at').value), end=new Date(byId('end-at').value);
+      const reminders=collectReminderTimes('createReminders',start);
+      await api(CONFIG.apiBase,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        title:byId('title').value.trim(),description:byId('description').value.trim(),
+        start_at:start.toISOString(),end_at:end.toISOString(),reminders
+      })});
+      state.date=dayStart(start); closeModal('createModal'); await loadEvents(); toast('Мероприятие добавлено');
+    } catch(error) { showError('createError',error.message); } finally { save.disabled=false; }
+  };
+  byId('editForm').onsubmit=async submit=>{
+    submit.preventDefault(); if(!state.activeEvent)return;
+    const save=byId('editSave'); save.disabled=true; hideError('editError');
+    try {
+      const start=new Date(byId('editStart').value), end=new Date(byId('editEnd').value);
+      const reminders=collectReminderTimes('editReminders',start);
+      await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}`,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          title:byId('editTitle').value.trim(),description:byId('editDescription').value.trim(),
+          start_at:start.toISOString(),end_at:end.toISOString(),reminders
+        })
+      });
+      state.date=dayStart(start); closeModal('editModal'); await loadEvents(); toast('Изменения сохранены');
+    } catch(error) { showError('editError',error.message); } finally { save.disabled=false; }
+  };
+  byId('completeEvent').onclick=async()=>{
+    if(!state.activeEvent)return; hideError('editError');
+    try {
+      await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}/toggle-complete`,{method:'POST'});
+      closeModal('editModal'); await loadEvents(false); toast('Статус обновлён');
+    } catch(error) { showError('editError',error.message); }
+  };
+  byId('deleteEvent').onclick=async()=>{
+    if(!state.activeEvent || !confirm(`Удалить «${state.activeEvent.title}»?`))return;
+    hideError('editError');
+    try {
+      await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}`,{method:'DELETE'});
+      state.selectedEventId=null; closeModal('editModal'); await loadEvents(false); toast('Мероприятие удалено');
+    } catch(error) { showError('editError',error.message); }
+  };
+  function toast(message) {
+    const node=byId('toast'); node.textContent=message; node.classList.add('show');
+    clearTimeout(toast.timer); toast.timer=setTimeout(()=>node.classList.remove('show'),3000);
+  }
+  byId('todayButton').onclick=()=>{state.date=dayStart(new Date());state.selectedEventId=null;state.view='timeline';render();scrollToRelevantTime();};
+  byId('todayButton').textContent='Сегодня';
+  byId('addEventButton').onclick=openCreate;
+  document.querySelectorAll('[data-add-reminder]').forEach(button=>button.onclick=()=>{
+    const container=byId(button.dataset.addReminder);
+    if(container.children.length>=10) { toast('Можно добавить не больше 10 уведомлений'); return; }
+    const startInput=container.id==='createReminders'?'start-at':'editStart';
+    const start=new Date(byId(startInput).value); container.dataset.mode='manual';
+    container.append(reminderRow(Number.isNaN(start.getTime())?new Date():start));
+  });
+  document.querySelectorAll('[data-close-modal]').forEach(button=>button.onclick=()=>closeModal(button.dataset.closeModal));
+  document.querySelectorAll('.modal-backdrop').forEach(modal=>modal.onclick=event=>{if(event.target===modal)closeModal(modal.id);});
+  document.querySelectorAll('[data-calendar-view]').forEach(button=>button.onclick=()=>{state.view=button.dataset.calendarView;updateView();scrollToRelevantTime();});
+  render(); loadEvents();
+})();
+</script>
+</body>
+</html>

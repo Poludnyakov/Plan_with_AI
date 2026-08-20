@@ -35,14 +35,10 @@ class DbSessionMiddleware(BaseMiddleware):
 
 
 async def set_bot_commands(bot: Bot):
-    from aiogram.types import BotCommand
-    commands = [
-        BotCommand(command="start", description="Перезапустить ассистента"),
-        BotCommand(command="calendar", description="Открыть интерактивный календарь"),
-        BotCommand(command="list", description="Открыть список дедлайнов (дашборд)")
-    ]
-    await bot.set_my_commands(commands)
-    logger.info("Bot commands successfully registered in Menu.")
+    from aiogram.types import MenuButtonDefault
+    await bot.delete_my_commands()
+    await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+    logger.info("Telegram command and Web App menus disabled.")
 
 
 async def main():

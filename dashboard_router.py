@@ -347,13 +347,21 @@ async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/events/{event_id}/toggle-complete", summary="Toggle event completion state")
-async def toggle_event_complete(event_id: int, db: AsyncSession = Depends(get_db)):
+async def toggle_event_complete(
+    event_id: int,
+    user_tg_id: int = Depends(get_current_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Изменяет статус выполнения (is_completed) конкретного события в базе данных.
     Доступен по AJAX без прямой передачи tg_id в пути (проверяется ID события).
     """
     try:
-        event_result = await db.execute(select(Event).filter(Event.id == event_id))
+        event_result = await db.execute(
+            select(Event).join(User).filter(
+                Event.id == event_id, User.tg_id == user_tg_id
+            )
+        )
         event = event_result.scalar_one_or_none()
         
         if not event:
@@ -384,13 +392,21 @@ async def toggle_event_complete(event_id: int, db: AsyncSession = Depends(get_db
 
 
 @router.delete("/api/events/{event_id}", summary="Delete an event manually")
-async def delete_event(event_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_event(
+    event_id: int,
+    user_tg_id: int = Depends(get_current_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Мануально удаляет событие из базы данных.
     Каскадно удаляет связанные запланированные напоминания.
     """
     try:
-        event_result = await db.execute(select(Event).filter(Event.id == event_id))
+        event_result = await db.execute(
+            select(Event).join(User).filter(
+                Event.id == event_id, User.tg_id == user_tg_id
+            )
+        )
         event = event_result.scalar_one_or_none()
         
         if not event:
@@ -467,7 +483,7 @@ async def get_events_json(
         )
 
 
-@router.get("/calendar", response_class=HTMLResponse, summary="Render student schedule visual calendar")
+@router.get("/calendar-legacy", response_class=HTMLResponse, summary="Legacy student calendar")
 async def get_calendar_page(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Отрисовывает страницу интерактивного FullCalendar (templates/calendar.html).

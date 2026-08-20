@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>планиИруй! · MAX</title>
+  <script src="https://st.max.ru/js/max-web-app.js"></script>
+  <style>
+    :root{color-scheme:light dark}body{margin:0;min-height:100vh;display:grid;place-items:center;
+    font:16px system-ui,sans-serif;background:#f6f7f9;color:#202124}.card{width:min(86vw,420px);
+    padding:28px;border-radius:24px;background:#fff;box-shadow:0 12px 40px #1f29371c;text-align:center}
+    .mark{font-size:42px}h1{margin:10px 0 6px;font-size:24px}p{color:#70757a;line-height:1.45}
+    #error{color:#c5221f}.spin{display:inline-block;width:22px;height:22px;border:3px solid #dbe4ff;
+    border-top-color:#2563eb;border-radius:50%;animation:r .8s linear infinite}@keyframes r{to{transform:rotate(360deg)}}
+    @media(prefers-color-scheme:dark){body{background:#111827;color:#f8fafc}.card{background:#1f2937}p{color:#cbd5e1}}
+  </style>
+</head>
+<body><main class="card"><div class="mark">🗓️</div><h1>планиИруй!</h1>
+  <p id="status">Проверяем аккаунт MAX…</p><div id="spinner" class="spin"></div><p id="error"></p></main>
+<script>
+(async()=>{
+  const status=document.getElementById('status'), error=document.getElementById('error');
+  try{
+    const app=window.WebApp;
+    if(!app) throw new Error('Откройте календарь кнопкой внутри MAX.');
+    if(app.ready) app.ready();
+    if(app.expand) app.expand();
+    const initData=app.initData||'';
+    if(!initData) throw new Error('MAX не передал данные авторизации. Закройте окно и откройте снова из бота.');
+    const response=await fetch('/max/api/auth',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:initData})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok) throw new Error(data.detail||'Не удалось подтвердить аккаунт MAX.');
+    if(data.access_token) try{sessionStorage.setItem('planiruy_max_access_token',data.access_token)}catch(_){}
+    status.textContent='Готово — открываем календарь…';
+    location.replace(data.redirect||'/max/timeline');
+  }catch(e){document.getElementById('spinner').hidden=true;status.textContent='Не удалось открыть календарь';error.textContent=e.message}
+})();
+</script></body></html>

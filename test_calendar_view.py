@@ -103,9 +103,10 @@ def test_get_calendar_page_success():
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert "планиИруй!" in response.text
-        assert "Календарь дедлайнов" in response.text
-        assert "12345" in response.text
-        assert "fullcalendar" in response.text.lower()
+        assert 'id="timeline"' in response.text
+        assert 'id="weeks"' in response.text
+        assert "/api/calendar/events" in response.text
+        assert "fullcalendar" not in response.text.lower()
     finally:
         app.dependency_overrides.clear()
 

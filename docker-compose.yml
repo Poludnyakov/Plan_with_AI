@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
@@ -23,9 +21,9 @@ services:
     build: .
     container_name: planiruy_web
     restart: always
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
-    expose:
-      - "8000"
+    command: uvicorn app_intervals:app --host 0.0.0.0 --port 8000
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
@@ -39,15 +37,22 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
       - GOOGLE_SPREADSHEET_ID=${GOOGLE_SPREADSHEET_ID}
+      - MAX_BOT_USERNAME=${MAX_BOT_USERNAME:-}
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   bot:
     build: .
     container_name: planiruy_bot
     restart: always
-    command: python bot_main.py
+    command: python bot_main_intervals.py
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}

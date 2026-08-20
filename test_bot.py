@@ -48,7 +48,7 @@ async def test_cmd_start_new_user():
         
         # Verify first call (greeting + persistent reply markup keyboard)
         first_call_args = mock_answer.call_args_list[0][0]
-        assert "Привет, vladimir!" in first_call_args[0]
+        assert "Привет, Владимир!" in first_call_args[0]
         assert "планиИруй!" in first_call_args[0]
 
 
@@ -475,6 +475,5 @@ async def test_handle_photo_input_ocr_failure():
         args, kwargs = mock_answer.call_args
         assert "Мне не удалось распознать расписание на этом изображении" in args[0]
         assert "убедитесь, что текст на картинке четкий" in args[0]
-
 
 

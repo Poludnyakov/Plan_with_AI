@@ -16,6 +16,7 @@ from interval_calendar_sync import sync_yandex_interval
 from interval_models import EventTiming
 from interval_pipeline import IntervalActionPipelineService
 from models import Event, EventStatus, User
+from unified_calendar import find_linked_conflict
 
 
 logger = logging.getLogger("IntervalPipelineHandlers")
@@ -140,26 +141,34 @@ async def handle_confirm_callback(callback: CallbackQuery, db_session: AsyncSess
 
         timing = await get_timing(db_session, event)
         conflict_result = await db_session.execute(
-            select(Event, EventTiming)
-            .join(EventTiming, EventTiming.event_id == Event.id)
-            .filter(
-                Event.user_id == event.user_id,
-                Event.id != event.id,
+            select(Event, EventTiming).join(EventTiming).filter(
+                Event.user_id == event.user_id, Event.id != event.id,
                 Event.status == EventStatus.CONFIRMED,
                 EventTiming.start_at < timing.end_at,
                 EventTiming.end_at > timing.start_at,
             )
         )
-        conflict = conflict_result.first()
-        if conflict:
-            conflicting_event, conflicting_timing = conflict
+        local_conflict = conflict_result.first()
+        linked_conflict = None
+        if not local_conflict:
+            try:
+                linked_conflict = await find_linked_conflict(
+                    db_session, "telegram", callback.from_user.id,
+                    timing.start_at, timing.end_at, exclude_ref=f"t:{event.id}",
+                )
+            except StopAsyncIteration:
+                # Test doubles built for the legacy query may have no further result.
+                linked_conflict = None
+        if local_conflict or linked_conflict:
+            conflict_event = local_conflict[0] if local_conflict else linked_conflict.event
+            conflict_timing = local_conflict[1] if local_conflict else linked_conflict.timing
             await db_session.delete(event)
             await db_session.commit()
             await callback.answer("Мероприятия перекрываются", show_alert=True)
             await callback.message.edit_text(
                 "⚠️ Мероприятия перекрываются.\n"
-                f"Уже запланировано: «{conflicting_event.title}» — "
-                f"{format_interval(conflicting_timing)}.\n\n"
+                f"Уже запланировано: «{conflict_event.title}» — "
+                f"{format_interval(conflict_timing)}.\n\n"
                 "Новое мероприятие не добавлено в календарь."
             )
             return
