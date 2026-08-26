@@ -30,6 +30,17 @@ class Settings:
         self.FOLDER_ID = os.getenv("FOLDER_IR") or os.getenv("FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID")
         self.YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL") or "https://llm.api.cloud.yandex.net/v1"
         self.YANDEX_CLOUD_MODEL = os.getenv("YANDEX_CLOUD_MODEL") or "qwen3.6-35b-a3b/latest"
+        self.YANDEX_DOCUMENT_MODEL = os.getenv("YANDEX_DOCUMENT_MODEL") or "yandexgpt-lite/latest"
+        self.YANDEX_DOCUMENT_READER_MODEL = (
+            os.getenv("YANDEX_DOCUMENT_READER_MODEL") or self.YANDEX_CLOUD_MODEL
+        )
+        self.YANDEX_DOCUMENT_NORMALIZER_MODEL = (
+            os.getenv("YANDEX_DOCUMENT_NORMALIZER_MODEL")
+            or self.YANDEX_DOCUMENT_MODEL
+        )
+        self.YANDEX_DOCUMENT_OCR_MODEL = (
+            os.getenv("YANDEX_DOCUMENT_OCR_MODEL") or "table"
+        )
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
         self.APP_URL = os.getenv("APP_URL") or "http://localhost:8000"
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")

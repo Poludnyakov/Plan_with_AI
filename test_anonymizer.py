@@ -25,6 +25,27 @@ def test_no_pii_text(anonymizer):
     assert anonymizer.anonymize_text(normal_text) == normal_text
 
 
+def test_event_words_are_not_mistaken_for_personal_data(anonymizer):
+    for text in (
+        "Контрольная по физике",
+        "Домашка по математике",
+        "Практика по информатике",
+        "Зачёт по истории",
+    ):
+        assert anonymizer.anonymize_text(text) == text
+
+
+def test_internal_name_markers_are_removed_from_event_titles(anonymizer):
+    assert anonymizer.clean_event_title("[ФИО] по физике") == "физика"
+    assert anonymizer.clean_event_title("ФИО по физике") == "физика"
+    assert anonymizer.clean_event_title("Встреча с [ФИО] завтра") == "Встреча завтра"
+    assert (
+        anonymizer.clean_event_title("Контрольная [ФИО] по физике")
+        == "Контрольная по физике"
+    )
+    assert anonymizer.clean_event_title("[ФИО]") == "Событие"
+
+
 def test_russian_fio_masking(anonymizer):
     """
     Tests various combinations of Russian names (FIO), including different

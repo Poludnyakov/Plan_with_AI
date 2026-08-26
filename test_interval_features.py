@@ -12,7 +12,7 @@ from app_intervals import app
 from dashboard_router import get_cookie_secret, sign_tg_id
 from database import Base, get_db
 from handlers.pipeline_handlers_intervals import handle_confirm_callback
-from interval_ai_service import IntervalExtraction
+from interval_ai_service import IntervalExtraction, mark_default_all_day
 from interval_models import EventTiming
 from interval_pipeline import IntervalActionPipelineService
 from models import Event, EventStatus, User
@@ -40,6 +40,23 @@ def test_ai_interval_requires_end_after_start():
     with pytest.raises(ValueError):
         IntervalExtraction(title="Ошибка", start_at=start, end_at=start)
 
+def test_date_only_intervals_become_all_day_and_default_text_is_safe():
+    trip = IntervalExtraction.model_validate({
+        "title": "Поездка", "start_at": "2026-08-13", "end_at": "2026-08-15",
+    })
+    assert trip.all_day is True
+    assert trip.start_at.isoformat() == "2026-08-13T00:00:00+03:00"
+    assert trip.end_at.isoformat() == "2026-08-16T00:00:00+03:00"
+
+    suitcase = IntervalExtraction(
+        title="Собрать чемоданы",
+        start_at=datetime(2026, 8, 20, 12, tzinfo=timezone.utc),
+        end_at=datetime(2026, 8, 20, 13, tzinfo=timezone.utc),
+    )
+    mark_default_all_day([suitcase], "завтра собираю чемоданы")
+    assert suitcase.all_day is True
+    assert suitcase.end_at - suitcase.start_at == timedelta(days=1)
+
 
 @pytest.mark.anyio
 async def test_pipeline_persists_start_and_end(interval_db):
@@ -48,10 +65,11 @@ async def test_pipeline_persists_start_and_end(interval_db):
     end = start + timedelta(hours=2)
     events = await pipeline._persist(
         123456,
-        [{"title": "Контрольная", "start_at": start, "end_at": end, "description": "ауд. 1"}],
+        [{"title": "[ФИО] по физике", "start_at": start, "end_at": end, "description": "ауд. 1"}],
         interval_db,
     )
     assert len(events) == 1
+    assert events[0].title == "физика"
     timing_result = await interval_db.execute(
         select(EventTiming).filter(EventTiming.event_id == events[0].id)
     )
@@ -133,6 +151,9 @@ def test_timeline_template_is_dependency_free(interval_db):
         assert 'id="start-at"' in response.text
         assert 'id="end-at"' in response.text
         assert "/api/v2/events" in response.text
+        assert 'id="all-day"' in response.text
+        assert 'all-day-lane' in response.text
+        assert 'grid-template-rows:62px 71px' in response.text
         assert "fullcalendar" not in response.text.lower()
     finally:
         app.dependency_overrides.clear()

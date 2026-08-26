@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy import Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -16,3 +16,6 @@ class EventTiming(Base):
     )
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    # A date-only event occupies the whole local day (end_at is exclusive).
+    # It intentionally does not participate in timed-event conflict detection.
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)

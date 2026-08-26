@@ -6,8 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anonymizer import DataAnonymizer
-from account_service import intelligent_reminders_enabled
-from intelligent_reminders import build_reminders
+from reminder_service import build_user_reminders
 from interval_ai_service import extract_intervals
 from interval_models import EventTiming
 from models import Event, EventStatus, ReminderStatus
@@ -51,10 +50,6 @@ class IntervalActionPipelineService:
         if not user:
             user = await user_repo.create(user_tg_id, "Europe/Moscow")
             await db_session.flush()
-        smart_enabled = await intelligent_reminders_enabled(
-            db_session, "telegram", user_tg_id
-        )
-
         created = []
         now = datetime.now(timezone.utc)
         for item in extracted:
@@ -65,17 +60,20 @@ class IntervalActionPipelineService:
 
             event = await event_repo.create(
                 user_id=user.id,
-                title=item.get("title") or "Без названия",
-                description=item.get("description") or "",
+                title=self.anonymizer.clean_event_title(item.get("title", "")),
+                description=self.anonymizer.clean_display_text(
+                    item.get("description", "")
+                ),
                 deadline=end_at,
                 status=EventStatus.DRAFT,
             )
             await db_session.flush()
-            db_session.add(EventTiming(event_id=event.id, start_at=start_at, end_at=end_at))
+            db_session.add(EventTiming(event_id=event.id, start_at=start_at, end_at=end_at, all_day=bool(item.get("all_day"))))
 
-            reminder_times = await build_reminders(
-                smart_enabled, event.title, event.description or "",
-                start_at, end_at, user.timezone, now,
+            reminder_times = await build_user_reminders(
+                db_session, "telegram", user_tg_id,
+                event.title, event.description or "",
+                start_at, end_at, user.timezone, now, all_day=bool(item.get("all_day")),
             )
             for remind_at in reminder_times:
                 await reminder_repo.create(

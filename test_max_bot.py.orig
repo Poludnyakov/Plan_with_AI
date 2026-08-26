@@ -106,19 +106,6 @@ async def max_db():
 
 
 @pytest.mark.anyio
-async def test_max_draft_removes_internal_name_marker(max_db):
-    service = MaxEventService()
-    start = datetime.now(timezone.utc) + timedelta(days=4)
-    event = (await service.create_drafts(max_db, 202, [{
-        "title": "ФИО по физике",
-        "description": "",
-        "start_at": start,
-        "end_at": start + timedelta(hours=1),
-    }]))[0]
-    assert event.title == "физика"
-
-
-@pytest.mark.anyio
 async def test_max_events_use_separate_tables_and_conflicts_remove_new_draft(max_db):
     service = MaxEventService()
     start = datetime.now(timezone.utc) + timedelta(days=2)

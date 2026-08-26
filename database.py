@@ -1,5 +1,6 @@
 import os
 from typing import AsyncGenerator
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
@@ -43,4 +44,20 @@ async def init_db() -> None:
         # Import models here to register them with Base.metadata before creation
         import models  # noqa: F401
         import account_models  # noqa: F401
+        import interval_models  # noqa: F401
+        import max_bot.models  # noqa: F401
+        import schedule_models  # noqa: F401
+        import reminder_models  # noqa: F401
+        import statistics_models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
+        # create_all() does not add columns to already deployed PostgreSQL tables.
+        # This migration is additive and keeps every existing timed event unchanged.
+        if conn.dialect.name == "postgresql":
+            await conn.execute(text(
+                "ALTER TABLE event_timings "
+                "ADD COLUMN IF NOT EXISTS all_day BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE max_event_timings "
+                "ADD COLUMN IF NOT EXISTS all_day BOOLEAN NOT NULL DEFAULT FALSE"
+            ))

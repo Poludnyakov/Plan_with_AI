@@ -83,17 +83,19 @@ async def test_check_and_send_reminders_success(test_db):
     mock_bot.send_message.assert_called_once()
     args, kwargs = mock_bot.send_message.call_args
     assert kwargs["chat_id"] == 12345
-    assert "Напоминание о дедлайне!" in kwargs["text"]
+    assert "Напоминание" in kwargs["text"]
     assert "Лекция по физике" in kwargs["text"]
     assert kwargs["reply_markup"] is not None
     
     # Verify inline keyboard details
     inline_keyboard = kwargs["reply_markup"].inline_keyboard
-    assert len(inline_keyboard) == 1
-    assert len(inline_keyboard[0]) == 1
-    button = inline_keyboard[0][0]
-    assert button.text == "✅ Завершить задачу"
-    assert button.callback_data == f"complete_event:{db_event.id}"
+    assert len(inline_keyboard) == 2
+    assert [button.text for button in inline_keyboard[0]] == [
+        "Понятно", "⏰ Через 30 мин"
+    ]
+    assert inline_keyboard[0][0].callback_data == f"reminder_ack:t:{db_event.id}"
+    assert inline_keyboard[0][1].callback_data == f"reminder_snooze:t:{db_event.id}"
+    assert inline_keyboard[1][0].callback_data == f"complete_event:{db_event.id}"
     
     # 5. Verify database state is updated to 'sent'
     result = await test_db.execute(select(Reminder).filter(Reminder.id == db_reminder.id))
@@ -152,10 +154,10 @@ async def test_check_and_send_reminders_completed_ignored(test_db):
     # The bot should not send any message
     mock_bot.send_message.assert_not_called()
     
-    # Database status remains PENDING
+    # Completed events are actively cleaned from the reminder queue.
     result = await test_db.execute(select(Reminder).filter(Reminder.id == db_reminder.id))
     updated_reminder = result.scalar_one()
-    assert updated_reminder.status == ReminderStatus.PENDING
+    assert updated_reminder.status == ReminderStatus.SENT
 
 
 @pytest.mark.anyio
@@ -228,10 +230,10 @@ async def test_setup_scheduler():
         
         assert scheduler is not None
         mock_start.assert_called_once()
-        mock_add_job.assert_called_once()
+        assert mock_add_job.call_count == 2
         
         # Verify job parameters
-        args, kwargs = mock_add_job.call_args
+        args, kwargs = mock_add_job.call_args_list[0]
         assert args[0] == check_and_send_reminders
         assert args[1] == "interval"
         assert kwargs["minutes"] == 1

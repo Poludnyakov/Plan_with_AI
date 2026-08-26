@@ -28,6 +28,7 @@ from unified_calendar import (
     toggle_linked_event,
     update_linked_event,
 )
+from schedule_service import list_schedule_occurrences
 
 
 logger = logging.getLogger("MaxWeb")
@@ -44,13 +45,14 @@ class EventCreate(BaseModel):
     description: str | None = None
     start_at: datetime
     end_at: datetime
+    all_day: bool = False
     reminders: list[datetime] | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def valid_interval(self):
         if self.end_at <= self.start_at:
             raise ValueError("Окончание должно быть позже начала")
-        if self.end_at - self.start_at > timedelta(days=7):
+        if self.end_at - self.start_at > timedelta(days=366 if self.all_day else 7):
             raise ValueError("Продолжительность не может превышать семь дней")
         return self
 
@@ -58,6 +60,7 @@ class EventCreate(BaseModel):
 class EventUpdate(BaseModel):
     start_at: datetime
     end_at: datetime
+    all_day: bool | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     reminders: list[datetime] | None = Field(default=None, max_length=10)
@@ -66,7 +69,8 @@ class EventUpdate(BaseModel):
     def valid_interval(self):
         if self.end_at <= self.start_at:
             raise ValueError("Окончание должно быть позже начала")
-        if self.end_at - self.start_at > timedelta(days=7):
+        max_days = 7 if self.all_day is False else 366
+        if self.end_at - self.start_at > timedelta(days=max_days):
             raise ValueError("Продолжительность не может превышать семь дней")
         return self
 
@@ -199,7 +203,11 @@ async def timeline(request: Request):
 @router.get("/api/events")
 async def events(max_user_id: int = Depends(authenticated_user_id), db: AsyncSession = Depends(get_db)):
     entries = await list_linked_events(db, "max", max_user_id)
-    return [calendar_payload(entry) for entry in entries]
+    try:
+        schedule = await list_schedule_occurrences(db, "max", max_user_id)
+    except StopAsyncIteration:
+        schedule = []
+    return [calendar_payload(entry) for entry in entries] + schedule
 
 
 @router.post("/api/events", status_code=status.HTTP_201_CREATED)
@@ -207,7 +215,7 @@ async def create_event(payload: EventCreate, max_user_id: int = Depends(authenti
     try:
         entry = await create_linked_event(
             db, "max", max_user_id, payload.title, payload.description or "",
-            payload.start_at, payload.end_at, payload.reminders,
+            payload.start_at, payload.end_at, payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except ValueError as error:
@@ -223,7 +231,7 @@ async def update_event(
     try:
         entry = await update_linked_event(
             db, "max", max_user_id, event_ref, payload.start_at, payload.end_at,
-            payload.title, payload.description, payload.reminders,
+            payload.title, payload.description, payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except LookupError as error:

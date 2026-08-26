@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,11 +9,33 @@ from .api import MaxApiClient, callback_button, open_app_button
 from .calendar import delete_max_yandex, sync_max_yandex
 from .config import MaxSettings
 from .models import MaxEvent, MaxEventTiming, MaxUser
+from schedule_ai_service import extract_weekly_schedule
+from schedule_document_service import MAX_FILE_BYTES, parse_schedule_document
+from schedule_service import (
+    cancel_import,
+    confirm_import,
+    create_import_draft,
+    finish_import_source,
+    import_preview,
+    parse_date_range,
+    parse_occurrence_date,
+    pending_draft,
+    pending_import_source,
+    save_import_source,
+    set_draft_range,
+    skip_candidates,
+    skip_occurrence,
+    update_import_source_prompt,
+)
+from reminder_service import acknowledge_delivery
 from unified_calendar import delete_linked_event, find_linked_conflict, get_owned_entry
 from .service import CANCEL_RE, MaxEventService, format_interval
 
 
 logger = logging.getLogger("MaxUpdateHandler")
+SKIP_SCHEDULE_RE = re.compile(
+    r"^\s*(?:я\s+)?(?:не\s+(?:иду|пойду)|пропущу|пропускаю)\b", re.IGNORECASE
+)
 
 
 class MaxUpdateHandler:
@@ -26,7 +49,8 @@ class MaxUpdateHandler:
         await self.client.send_message(
             "Привет! Я **планиИруй! для MAX**. Напишите или пришлите голосом, например: "
             "«Контрольная по математике завтра с 13 до 14». Я покажу карточку перед добавлением.\n\n"
-            "Удаление: «отмена контрольная завтра в 13». Изображение расписания тоже можно прислать.",
+            "Удаление: «отмена контрольная завтра в 13». Можно также прислать фото или файл "
+            "с подписью-инструкцией и периодом расписания.",
             user_id=user_id,
             buttons=[[self.app_button()]],
         )
@@ -38,7 +62,7 @@ class MaxUpdateHandler:
         ) or "• Нет будущих напоминаний"
         text = (
             (source + "\n" if source else "") + f"**{event.title}**\n"
-            f"🕒 {format_interval(timing.start_at, timing.end_at)}\n"
+            f"🕒 {format_interval(timing.start_at, timing.end_at, all_day=bool(getattr(timing, "all_day", False)))}\n"
             + (f"📍 {event.description}\n" if event.description else "")
             + f"\n**Напоминания:**\n{reminders}\n\nДобавить мероприятие в календарь?"
         )
@@ -63,6 +87,91 @@ class MaxUpdateHandler:
     def sender_id(message: dict) -> int:
         return int((message.get("sender") or {}).get("user_id"))
 
+    @staticmethod
+    def attachment_url(attachment: dict) -> str | None:
+        payload = attachment.get("payload") or {}
+        return (
+            payload.get("url")
+            or payload.get("download_url")
+            or attachment.get("url")
+        )
+
+    @staticmethod
+    def attachment_name(attachment: dict) -> str:
+        payload = attachment.get("payload") or {}
+        name = str(
+            payload.get("name")
+            or payload.get("file_name")
+            or payload.get("filename")
+            or ("schedule.jpg" if attachment.get("type") == "image" else "document")
+        )
+        if "." not in name:
+            mime = str(
+                payload.get("mime_type") or payload.get("content_type") or ""
+            ).casefold()
+            suffix = {
+                "application/pdf": ".pdf",
+                "application/vnd.ms-excel": ".xls",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+                "text/csv": ".csv",
+                "text/plain": ".txt",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+            }.get(mime, "")
+            name += suffix
+        return name
+
+    async def processing_status(self, user_id: int, subject: str = "Ваше сообщение") -> None:
+        try:
+            await self.client.send_message(f"⏳ {subject} обрабатывается…", user_id=user_id)
+        except Exception:
+            # The status is informational and must never interrupt processing.
+            logger.warning("Could not send MAX processing status", exc_info=True)
+
+    @staticmethod
+    def verified_preview(draft, extraction: dict) -> str:
+        verification = extraction.get("verification") or {}
+        source_days = verification.get("source_weekdays") or []
+        output_days = verification.get("output_weekdays") or []
+        labels = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+        checks = []
+        if source_days:
+            checks.append(
+                "Проверка покрытия: "
+                + ", ".join(labels[index] for index in output_days)
+                + " из источника "
+                + ", ".join(labels[index] for index in source_days)
+            )
+        checks.extend(verification.get("warnings") or [])
+        prefix = "✅ Источник проверен."
+        if checks:
+            prefix += "\n" + "\n".join(checks)
+        return prefix + "\n\n" + import_preview(draft)
+
+    async def create_verified_schedule_draft(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        content: bytes,
+        filename: str,
+        prompt: str,
+        date_range,
+    ):
+        extraction = await parse_schedule_document(
+            content, filename, prompt, valid_range=date_range
+        )
+        for slot in extraction["slots"]:
+            slot["title"] = self.service.anonymizer.clean_event_title(
+                self.service.anonymizer.anonymize_text(slot.get("title", ""))
+            )
+            slot["description"] = self.service.anonymizer.clean_display_text(
+                self.service.anonymizer.anonymize_text(slot.get("description", ""))
+            )
+        draft = await create_import_draft(db, "max", user_id, extraction)
+        await set_draft_range(db, draft, *date_range)
+        return draft, extraction
+
     async def handle_message(self, message: dict, db: AsyncSession) -> None:
         user_id = self.sender_id(message)
         body = message.get("body") or {}
@@ -84,9 +193,193 @@ class MaxUpdateHandler:
         if text and CANCEL_RE.match(text):
             await self.handle_cancellation(user_id, text, db)
             return
+        if text and SKIP_SCHEDULE_RE.match(text):
+            target = parse_occurrence_date(text)
+            if target is None:
+                await self.client.send_message(
+                    "Укажите дату занятия. Например: «не иду на математику завтра».",
+                    user_id=user_id,
+                )
+                return
+            candidates = await skip_candidates(db, "max", user_id, target, text)
+            if not candidates:
+                await self.client.send_message(
+                    "На эту дату не нашёл подходящего занятия в расписании.", user_id=user_id
+                )
+                return
+            if len(candidates) == 1:
+                await skip_occurrence(db, "max", user_id, candidates[0]["id"])
+                await self.client.send_message(
+                    f"Занятие «{candidates[0]['title']}» {target:%d.%m} скрыто в календаре.",
+                    user_id=user_id,
+                )
+                return
+            buttons = [[callback_button(
+                f"Пропустить {item['start_local']} · {item['title'][:28]}",
+                f"skip_schedule:{item['id']}",
+            )] for item in candidates[:8]]
+            await self.client.send_message("Какое занятие пропустить?", user_id=user_id, buttons=buttons)
+            return
+
+        source = await pending_import_source(db, "max", user_id)
+        if source:
+            if re.search(
+                r"\b(?:отмена|отменить)\s+(?:импорт|расписание)\b", text, re.I
+            ):
+                await finish_import_source(db, source, "cancelled")
+                await self.client.send_message("Импорт расписания отменён.", user_id=user_id)
+                return
+            combined_prompt = " ".join(
+                part for part in (source.prompt.strip(), text) if part
+            )
+            try:
+                date_range = parse_date_range(combined_prompt)
+            except ValueError as error:
+                await self.client.send_message(
+                    f"❌ Некорректный период: {error}", user_id=user_id
+                )
+                return
+            if date_range is None:
+                await update_import_source_prompt(db, source, combined_prompt)
+                await self.client.send_message(
+                    "Файл сохранён. Теперь укажите период двумя датами, например: "
+                    "«с 1 сентября по 1 декабря». Можно также уточнить группу или человека.",
+                    user_id=user_id,
+                )
+                return
+            await self.processing_status(user_id, "Ваш файл")
+            try:
+                draft, extraction = await self.create_verified_schedule_draft(
+                    db, user_id, source.content, source.filename,
+                    combined_prompt, date_range,
+                )
+                await finish_import_source(db, source)
+                await self.client.send_message(
+                    self.verified_preview(draft, extraction),
+                    user_id=user_id,
+                    buttons=[
+                        [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
+                        [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+                    ],
+                )
+            except Exception as error:
+                await db.rollback()
+                logger.error(
+                    "Saved MAX schedule source processing failed: %s", error,
+                    exc_info=True,
+                )
+                await self.client.send_message(f"❌ {error}", user_id=user_id)
+            return
+
+        draft = await pending_draft(db, "max", user_id)
+        if text and draft and draft.status == "awaiting_range":
+            if re.search(r"\b(?:отмена|отменить)\s+(?:импорт|расписание)\b", text, re.I):
+                await cancel_import(db, "max", user_id, draft.id)
+                await self.client.send_message("Импорт расписания отменён.", user_id=user_id)
+                return
+            date_range = parse_date_range(text)
+            if date_range is None:
+                await self.client.send_message(
+                    "Для распознанного расписания сначала укажите период, например: "
+                    "«с 1 сентября по 1 декабря». Отменить: «отмена импорта».",
+                    user_id=user_id,
+                )
+                return
+            await set_draft_range(db, draft, *date_range)
+            await self.client.send_message(
+                import_preview(draft), user_id=user_id, buttons=[
+                    [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
+                    [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+                ],
+            )
+            return
         attachments = body.get("attachments") or []
         try:
-            if text and not text.startswith("/"):
+            document = next((x for x in attachments if x.get("type") == "file"), None)
+            if document:
+                payload = document.get("payload") or {}
+                size = payload.get("size") or document.get("size")
+                if size is not None and int(size) > MAX_FILE_BYTES:
+                    await self.client.send_message(
+                        "❌ Файл слишком большой. Максимальный размер — 15 МБ.",
+                        user_id=user_id,
+                    )
+                    return
+                url = self.attachment_url(document)
+                if not url:
+                    raise ValueError("MAX не передал ссылку для скачивания файла.")
+                await self.processing_status(user_id, "Ваш файл")
+                content = await self.client.download(url)
+                date_range = parse_date_range(text) if text else None
+                filename = self.attachment_name(document)
+                if date_range is None:
+                    await save_import_source(
+                        db, "max", user_id, content, filename, text
+                    )
+                    await self.client.send_message(
+                        "Файл сохранён — повторно отправлять его не нужно. Напишите, что выбрать, "
+                        "и период двумя датами. Например: «группа ПИ-241 с 1 сентября по 1 декабря».",
+                        user_id=user_id,
+                    )
+                    return
+                draft, extraction = await self.create_verified_schedule_draft(
+                    db, user_id, content, filename, text, date_range
+                )
+                await self.client.send_message(
+                    self.verified_preview(draft, extraction), user_id=user_id, buttons=[
+                        [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
+                        [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+                    ],
+                )
+                return
+
+            image = next((x for x in attachments if x.get("type") == "image"), None)
+            image_content = None
+            if image:
+                await self.processing_status(user_id, "Ваше изображение")
+                image_url = self.attachment_url(image)
+                if not image_url:
+                    raise ValueError("MAX не передал ссылку на изображение.")
+                image_content = await self.client.download(image_url)
+                date_range = parse_date_range(text) if text else None
+                if text and date_range:
+                    draft, extraction = await self.create_verified_schedule_draft(
+                        db, user_id, image_content, self.attachment_name(image),
+                        text, date_range,
+                    )
+                    await self.client.send_message(
+                        self.verified_preview(draft, extraction), user_id=user_id, buttons=[
+                            [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
+                            [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+                        ],
+                    )
+                    return
+                if text:
+                    await save_import_source(
+                        db, "max", user_id, image_content,
+                        self.attachment_name(image), text,
+                    )
+                    await self.client.send_message(
+                        "Изображение сохранено. Напишите период двумя датами, например: "
+                        "«с 1 сентября по 1 декабря». Повторно отправлять его не нужно.",
+                        user_id=user_id,
+                    )
+                    return
+                weekly = await extract_weekly_schedule(image_content)
+                if weekly:
+                    await save_import_source(
+                        db, "max", user_id, image_content,
+                        self.attachment_name(image),
+                    )
+                    await self.client.send_message(
+                        "Похоже, это расписание. Напишите одним сообщением, что выбрать, и период.\n\n"
+                        "Например: «группа ПИ-241 с 1 сентября по 1 декабря». "
+                        "Результат старого распознавателя не используется.",
+                        user_id=user_id,
+                    )
+                    return
+            if text and not text.startswith("/") and not attachments:
+                await self.processing_status(user_id)
                 events = await self.service.from_text(db, user_id, text)
                 source = ""
             else:
@@ -94,9 +387,17 @@ class MaxUpdateHandler:
                 if not attachment:
                     await self.client.send_message("Пришлите текст, голосовое сообщение или изображение расписания.", user_id=user_id)
                     return
-                content = await self.client.download((attachment.get("payload") or {})["url"])
+                if attachment["type"] == "audio":
+                    await self.processing_status(user_id, "Ваше голосовое сообщение")
+                content = (
+                    image_content
+                    if attachment["type"] == "image" and image_content is not None
+                    else await self.client.download(self.attachment_url(attachment) or "")
+                )
                 if attachment["type"] == "image":
-                    events = await self.service.from_image(db, user_id, content)
+                    events = await self.service.from_image(
+                        db, user_id, image_content if image_content is not None else content
+                    )
                     source = "🖼 Распознано из изображения"
                 else:
                     events = await self.service.from_voice(db, user_id, content)
@@ -163,6 +464,38 @@ class MaxUpdateHandler:
             await self.client.answer_callback(callback_id, notification="Неизвестная команда")
             return
         try:
+            if action == "schedule_confirm":
+                state, created = await confirm_import(db, "max", user_id, int(event_text))
+                if state == "missing":
+                    await self.client.answer_callback(callback_id, notification="Черновик не найден")
+                elif state == "not_ready":
+                    await self.client.answer_callback(callback_id, notification="Сначала укажите период")
+                elif state == "imported":
+                    await self.client.answer_callback(callback_id, notification="Уже добавлено")
+                else:
+                    await self.client.answer_callback(
+                        callback_id,
+                        text=f"✅ Расписание добавлено: {created} занятий в недельном шаблоне.\n"
+                        "Оно показано фоном и не блокирует личные мероприятия.",
+                        notification="Расписание добавлено",
+                    )
+                return
+            if action == "schedule_cancel":
+                cancelled = await cancel_import(db, "max", user_id, int(event_text))
+                await self.client.answer_callback(
+                    callback_id,
+                    text="Импорт расписания отменён. Календарь не изменён." if cancelled else None,
+                    notification="Импорт отменён" if cancelled else "Черновик уже закрыт",
+                )
+                return
+            if action == "skip_schedule":
+                skipped = await skip_occurrence(db, "max", user_id, event_text)
+                await self.client.answer_callback(
+                    callback_id,
+                    text="Занятие скрыто в календаре только на выбранную дату." if skipped else None,
+                    notification="Занятие скрыто" if skipped else "Занятие не найдено",
+                )
+                return
             if action == "delete" and ":" in event_text:
                 entry = await get_owned_entry(db, "max", user_id, event_text)
                 if not entry:
@@ -182,7 +515,7 @@ class MaxUpdateHandler:
                     await self.client.answer_callback(callback_id, notification="Событие уже удалено")
                     return
                 event, timing = row
-                await self.client.answer_callback(callback_id, text=f"🗑 {event.title}\n{format_interval(timing.start_at, timing.end_at)}\nУдалено.", notification="Удалено")
+                await self.client.answer_callback(callback_id, text=f"🗑 {event.title}\n{format_interval(timing.start_at, timing.end_at, all_day=bool(getattr(timing, "all_day", False)))}\nУдалено.", notification="Удалено")
                 return
             if action == "complete":
                 row = await self.owned(db, user_id, event_id)
@@ -190,7 +523,10 @@ class MaxUpdateHandler:
                     await self.client.answer_callback(callback_id, notification="Событие не найдено")
                     return
                 row[0].is_completed = not row[0].is_completed
-                await db.commit()
+                if row[0].is_completed:
+                    await acknowledge_delivery(db, "max", row[0].id, user_id)
+                else:
+                    await db.commit()
                 await self.client.answer_callback(callback_id, notification="Статус обновлён")
                 return
             if action != "confirm":
@@ -201,20 +537,23 @@ class MaxUpdateHandler:
                 await self.client.answer_callback(callback_id, notification="Событие не найдено")
                 return
             event, timing = row
-            conflict_result = await db.execute(
-                select(MaxEvent, MaxEventTiming).join(MaxEventTiming).filter(
-                    MaxEvent.user_id == event.user_id, MaxEvent.id != event.id,
-                    MaxEvent.status == "confirmed", MaxEventTiming.start_at < timing.end_at,
-                    MaxEventTiming.end_at > timing.start_at,
+            local_conflict = None
+            if not bool(getattr(timing, "all_day", False)):
+                conflict_result = await db.execute(
+                    select(MaxEvent, MaxEventTiming).join(MaxEventTiming).filter(
+                        MaxEvent.user_id == event.user_id, MaxEvent.id != event.id,
+                        MaxEvent.status == "confirmed", MaxEventTiming.all_day.is_(False),
+                        MaxEventTiming.start_at < timing.end_at,
+                        MaxEventTiming.end_at > timing.start_at,
+                    )
                 )
-            )
-            local_conflict = conflict_result.first()
+                local_conflict = conflict_result.first()
             linked_conflict = None
             if not local_conflict:
                 try:
                     linked_conflict = await find_linked_conflict(
                         db, "max", user_id, timing.start_at, timing.end_at,
-                        exclude_ref=f"m:{event.id}",
+                        exclude_ref=f"m:{event.id}", all_day=bool(getattr(timing, "all_day", False)),
                     )
                 except StopAsyncIteration:
                     linked_conflict = None
@@ -225,15 +564,15 @@ class MaxUpdateHandler:
                 await db.commit()
                 await self.client.answer_callback(
                     callback_id,
-                    text=f"⚠️ Мероприятия перекрываются.\nУже запланировано: «{other.title}» — {format_interval(other_time.start_at, other_time.end_at)}.\n\nНовое мероприятие не добавлено.",
+                    text=f"⚠️ Мероприятия перекрываются.\nУже запланировано: «{other.title}» — {format_interval(other_time.start_at, other_time.end_at, all_day=bool(getattr(other_time, "all_day", False)))}.\n\nНовое мероприятие не добавлено.",
                     notification="Мероприятия перекрываются",
                 )
                 return
             if event.status != "confirmed":
                 event.status = "confirmed"
                 await db.commit()
-                asyncio.create_task(sync_max_yandex(event.title, timing.start_at, timing.end_at, event.description or "", event.id))
-            await self.client.answer_callback(callback_id, text=f"✅ {event.title}\n{format_interval(timing.start_at, timing.end_at)}\nДобавлено в календарь.", notification="Подтверждено")
+                asyncio.create_task(sync_max_yandex(event.title, timing.start_at, timing.end_at, event.description or "", event.id, all_day=bool(getattr(timing, "all_day", False))))
+            await self.client.answer_callback(callback_id, text=f"✅ {event.title}\n{format_interval(timing.start_at, timing.end_at, all_day=bool(getattr(timing, "all_day", False)))}\nДобавлено в календарь.", notification="Подтверждено")
         except Exception as error:
             await db.rollback()
             logger.error("MAX callback failed: %s", error, exc_info=True)

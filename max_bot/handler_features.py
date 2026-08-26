@@ -9,12 +9,47 @@ from account_service import (
     intelligent_reminders_enabled,
     set_intelligent_reminders,
 )
+from reminder_service import (
+    acknowledge_delivery,
+    preference_text,
+    reminder_preference,
+    snooze_delivery,
+    update_reminder_preference,
+)
+from unified_calendar import get_owned_entry
 
+from .api import callback_button
 from .handler_full import FullMaxUpdateHandler
 from .models import MaxUser
 
 
 class FeatureMaxUpdateHandler(FullMaxUpdateHandler):
+    @staticmethod
+    def reminder_panel(preference):
+        return [
+            [callback_button(
+                f"🔔 Уведомления: {'вкл' if preference.enabled else 'выкл'}",
+                "reminder_pref:enabled",
+            )],
+            [callback_button("Количество: изменить", "reminder_pref:frequency")],
+            [callback_button(
+                f"🌅 Сводка: {'вкл' if preference.daily_summary else 'выкл'}",
+                "reminder_pref:summary",
+            )],
+            [callback_button(
+                f"🕗 Время: {preference.summary_hour:02d}:00",
+                "reminder_pref:summary_hour",
+            )],
+            [callback_button(
+                f"⏰ Позже: {preference.snooze_minutes} мин",
+                "reminder_pref:snooze",
+            )],
+            [callback_button(
+                f"💳 AI: {'вкл' if preference.use_ai else 'выкл'}",
+                "reminder_pref:ai",
+            )],
+        ]
+
     @staticmethod
     def profile_name(user: dict) -> str:
         first_name = str(user.get("first_name") or "").strip()
@@ -135,23 +170,71 @@ class FeatureMaxUpdateHandler(FullMaxUpdateHandler):
             return
 
         if command in {"/smart_reminders", "/reminders"}:
-            enabled = await intelligent_reminders_enabled(db, "max", user_id)
-            await db.commit()
-            state = "включены" if enabled else "выключены"
+            preference = await update_reminder_preference(
+                db, "max", user_id, "platform"
+            )
             await self.client.send_message(
-                f"🧠 Интеллектуальные напоминания **{state}**.\n\n"
-                "Включить: /smart_reminders_on\nВыключить: /smart_reminders_off",
+                preference_text(preference),
                 user_id=user_id,
+                buttons=self.reminder_panel(preference),
             )
             return
         if command in {"/smart_reminders_on", "/smart_reminders_off"}:
             enabled = command.endswith("_on")
-            await set_intelligent_reminders(db, "max", user_id, enabled)
+            preference = await reminder_preference(db, "max", user_id)
+            if preference.use_ai != enabled:
+                preference = await update_reminder_preference(
+                    db, "max", user_id, "ai"
+                )
             await self.client.send_message(
-                "🧠 Интеллектуальные напоминания включены."
+                "💳 AI-анализ времени включён и может расходовать средства Yandex Cloud."
                 if enabled else
-                "🔕 Интеллектуальные напоминания выключены. Останутся стандартные интервалы.",
+                "✅ Платный AI отключён. Используются бесплатные локальные правила.",
                 user_id=user_id,
+                buttons=self.reminder_panel(preference),
             )
             return
         await super().handle_message(message, db)
+
+    async def handle_callback(self, update: dict, db: AsyncSession) -> None:
+        callback = update.get("callback") or {}
+        payload = callback.get("payload") or ""
+        if not payload.startswith(("reminder_pref:", "reminder_ack:", "reminder_snooze:")):
+            await super().handle_callback(update, db)
+            return
+        callback_id = callback.get("callback_id")
+        user_id = int((callback.get("user") or {}).get("user_id"))
+        if payload.startswith("reminder_pref:"):
+            preference = await update_reminder_preference(
+                db, "max", user_id, payload.split(":", 1)[1]
+            )
+            await self.client.answer_callback(
+                callback_id,
+                text=preference_text(preference),
+                notification="Настройка сохранена",
+                buttons=self.reminder_panel(preference),
+            )
+            return
+        _, prefix, raw_event_id = payload.split(":", 2)
+        entry = await get_owned_entry(db, "max", user_id, f"{prefix}:{raw_event_id}")
+        if not entry:
+            await self.client.answer_callback(callback_id, notification="Событие не найдено")
+            return
+        if payload.startswith("reminder_ack:"):
+            await acknowledge_delivery(db, entry.source, entry.event.id, user_id)
+            await self.client.answer_callback(
+                callback_id, text=f"✅ Учтено: {entry.event.title}", notification="Учтено"
+            )
+            return
+        try:
+            snooze_at, minutes = await snooze_delivery(
+                db, entry.source, entry.event.id, user_id, entry.timing.start_at
+            )
+        except ValueError as error:
+            await self.client.answer_callback(callback_id, notification=str(error))
+            return
+        await self.client.answer_callback(
+            callback_id,
+            text=f"⏰ Напомню о «{entry.event.title}» в {snooze_at.astimezone():%H:%M}.",
+            notification=f"Напомню через {minutes} мин",
+        )

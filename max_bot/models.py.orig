@@ -50,8 +50,6 @@ class MaxEventTiming(Base):
     )
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
-    # Mirrors EventTiming.all_day for calendar parity with Telegram.
-    all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     event: Mapped[MaxEvent] = relationship(back_populates="timing")
 
 

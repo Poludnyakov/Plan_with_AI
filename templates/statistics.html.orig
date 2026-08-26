@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>Статистика — планиИруй!</title>
+    <style>
+        :root {
+            --bg: #f5f7fb;
+            --panel: #ffffff;
+            --text: #172033;
+            --muted: #6f7787;
+            --line: #e7eaf0;
+            --blue: #2481cc;
+            --violet: #7357e8;
+            --green: #25a36f;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(36,129,204,.10), transparent 28rem),
+                radial-gradient(circle at 100% 20%, rgba(115,87,232,.09), transparent 25rem),
+                var(--bg);
+            color: var(--text);
+            font: 15px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding: 54px 0 64px; }
+        header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+        h1 { margin: 0; font-size: clamp(30px, 5vw, 48px); line-height: 1.08; letter-spacing: -.04em; }
+        .updated { color: var(--muted); font-size: 13px; white-space: nowrap; }
+        .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .card {
+            min-height: 190px;
+            padding: 25px;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid rgba(255,255,255,.8);
+            border-radius: 22px;
+            background: rgba(255,255,255,.9);
+            box-shadow: 0 14px 42px rgba(29, 39, 64, .08);
+        }
+        .card::after {
+            content: "";
+            position: absolute;
+            right: -34px;
+            bottom: -45px;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: .09;
+        }
+        .card:nth-child(1) { --accent: var(--blue); }
+        .card:nth-child(2) { --accent: var(--green); }
+        .card:nth-child(3) { --accent: var(--violet); }
+        .label { color: var(--muted); font-size: 13px; font-weight: 650; }
+        .value { margin: 22px 0 8px; font-size: clamp(42px, 6vw, 62px); font-weight: 800; line-height: 1; letter-spacing: -.055em; }
+        .note { max-width: 26ch; color: var(--muted); font-size: 12px; }
+        .disclosure {
+            margin: 18px 0 0;
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: #eef5fb;
+            color: #4f6172;
+            font-size: 12px;
+        }
+        @media (max-width: 760px) {
+            main { width: min(100% - 22px, 540px); padding-top: 30px; }
+            header { align-items: flex-start; flex-direction: column; }
+            .metrics { grid-template-columns: 1fr; }
+            .card { min-height: 164px; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <div>
+            <h1>Статистика</h1>
+        </div>
+        <div class="updated">Данные обновляются при открытии</div>
+    </header>
+
+    <section class="metrics" aria-label="Основные показатели">
+        <article class="card">
+            <div class="label">Пользователи</div>
+            <div class="value">{{ "{:,}".format(statistics.users).replace(",", " ") }}</div>
+            <div class="note">Историческая аудитория и новые уникальные аккаунты Telegram/MAX.</div>
+        </article>
+        <article class="card">
+            <div class="label">Retention · третья неделя</div>
+            <div class="value">{{ "%.1f"|format(statistics.week3_retention) }}%</div>
+            <div class="note">Возврат с активностью на 14–20-й день после регистрации.</div>
+        </article>
+        <article class="card">
+            <div class="label">Обработано событий</div>
+            <div class="value">{{ "{:,}".format(statistics.events).replace(",", " ") }}</div>
+            <div class="note">Личные события Telegram/MAX и позиции импортированного расписания.</div>
+        </article>
+    </section>
+
+    <p class="disclosure">
+        Верхние показатели включают явно заданный исторический baseline: 527 пользователей,
+        35% retention третьей недели и 7 451 обработанное событие. Изменения после
+        {{ statistics.baseline_captured_at.strftime("%d.%m.%Y %H:%M") }} рассчитываются по данным PostgreSQL.
+    </p>
+</main>
+</body>
+</html>

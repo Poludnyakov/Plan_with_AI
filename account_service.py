@@ -11,6 +11,8 @@ from account_models import (
     UnifiedAccount,
     WebLoginTicket,
 )
+from schedule_models import ScheduleImportDraft, ScheduleSeries
+from reminder_models import ReminderDeliveryState, ReminderPreference
 
 
 PLATFORMS = {"telegram", "max"}
@@ -104,9 +106,42 @@ async def consume_link_code(
         if any(item.platform in source_platforms for item in target_identities):
             raise ValueError("В этих аккаунтах уже подключена одинаковая платформа.")
         old_account_id = target.account_id
+        source_reminders = await db.get(ReminderPreference, source.account_id)
+        target_reminders = await db.get(ReminderPreference, old_account_id)
+        if target_reminders and not source_reminders:
+            db.add(ReminderPreference(
+                account_id=source.account_id,
+                enabled=target_reminders.enabled,
+                frequency=target_reminders.frequency,
+                use_ai=target_reminders.use_ai,
+                daily_summary=target_reminders.daily_summary,
+                summary_hour=target_reminders.summary_hour,
+                snooze_minutes=target_reminders.snooze_minutes,
+                notification_platform=target_reminders.notification_platform,
+                last_summary_date=target_reminders.last_summary_date,
+            ))
+            await db.flush()
         await db.execute(
             update(AccountIdentity)
             .where(AccountIdentity.account_id == old_account_id)
+            .values(account_id=source.account_id)
+        )
+        # Recurring schedules belong to the unified account itself (ordinary
+        # events remain attached to their platform users). Preserve both when
+        # two existing accounts are linked.
+        await db.execute(
+            update(ScheduleSeries)
+            .where(ScheduleSeries.account_id == old_account_id)
+            .values(account_id=source.account_id)
+        )
+        await db.execute(
+            update(ScheduleImportDraft)
+            .where(ScheduleImportDraft.account_id == old_account_id)
+            .values(account_id=source.account_id)
+        )
+        await db.execute(
+            update(ReminderDeliveryState)
+            .where(ReminderDeliveryState.account_id == old_account_id)
             .values(account_id=source.account_id)
         )
     link.used_at = now

@@ -22,13 +22,13 @@ button,input,textarea { font:inherit; }
 button { -webkit-tap-highlight-color:transparent; }
 .calendar-shell {
   width:min(100%,1000px); height:100vh; height:100dvh; margin:auto;
-  display:grid; grid-template-rows:auto auto minmax(0,1fr) auto;
+  display:grid; grid-template-rows:62px 71px minmax(0,1fr) calc(62px + env(safe-area-inset-bottom));
   background:var(--surface); overflow:hidden;
 }
 .calendar-header {
-  min-height:62px; padding:9px 12px 9px max(12px,env(safe-area-inset-left));
+  height:62px; min-height:0; padding:9px 12px 9px max(12px,env(safe-area-inset-left));
   display:flex; align-items:center; justify-content:space-between; gap:10px;
-  border-bottom:1px solid var(--line); background:var(--surface); z-index:10;
+  overflow:hidden; border-bottom:1px solid var(--line); background:var(--surface); z-index:10;
 }
 .calendar-brand { min-width:0; }
 .calendar-brand span {
@@ -47,13 +47,13 @@ button { -webkit-tap-highlight-color:transparent; }
 }
 .header-button.add { background:var(--primary); color:#fff; box-shadow:0 4px 12px #2563eb2e; }
 .weeks {
-  display:flex; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none;
+  height:71px; min-height:71px; display:flex; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none;
   overscroll-behavior-x:contain; touch-action:pan-x; border-bottom:1px solid var(--line);
   background:var(--surface);
 }
 .weeks::-webkit-scrollbar { display:none; }
 .week-page {
-  flex:0 0 100%; padding:7px 7px 8px; display:grid;
+  height:70px; flex:0 0 100%; padding:7px 7px 8px; display:grid;
   grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; scroll-snap-align:center;
 }
 .week-day {
@@ -90,6 +90,12 @@ button { -webkit-tap-highlight-color:transparent; }
   text-align:left; user-select:none; touch-action:pan-y; cursor:pointer;
   box-shadow:0 1px 2px #1d4ed81c; transition:box-shadow .15s,filter .15s;
 }
+.calendar-event.schedule-event {
+  z-index:0; left:2px !important; width:calc(100% - 4px) !important;
+  border-left-color:#8a94a6; border-style:dashed; background:#eef1f5;
+  color:#596273; opacity:.62; pointer-events:none; box-shadow:none;
+}
+.calendar-event:not(.schedule-event) { z-index:2; }
 .calendar-event.done { border-color:#258754; background:#e4f4e9; color:#17613e; opacity:.7; }
 .calendar-event.selected {
   z-index:12; outline:3px solid #3478f64d; box-shadow:0 6px 20px #1d4ed835;
@@ -101,6 +107,11 @@ button { -webkit-tap-highlight-color:transparent; }
   box-shadow:none; outline:0;
 }
 .calendar-event.saving { cursor:wait; }
+.all-day-lane { position:sticky; top:0; z-index:18; margin-left:53px; margin-right:8px; padding:5px 0; display:grid; gap:4px; background:var(--surface); box-shadow:0 2px 7px #11182712; }
+.all-day-event { min-height:28px; width:100%; padding:6px 9px; border:0; border-left:4px solid #5b82c6; border-radius:8px; background:#dceaff; color:#17477f; opacity:.62; text-align:left; font-size:12px; font-weight:800; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.all-day-event.selected { opacity:.92; outline:2px solid #3478f64d; }
+.agenda-event.all-day .agenda-mark { background:#5b82c6; opacity:.62; }
+.agenda-event.all-day .agenda-time { font-weight:750; }
 .event-title {
   display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   font-size:12px; line-height:1.2; font-weight:800;
@@ -122,12 +133,16 @@ button { -webkit-tap-highlight-color:transparent; }
   background:transparent; color:var(--text); text-align:left; cursor:pointer;
 }
 .agenda-event.selected { background:var(--primary-soft); outline:2px solid #3478f633; }
+.agenda-event.schedule-event {
+  cursor:default; background:#f3f5f8; color:#596273; opacity:.78;
+}
+.agenda-event.schedule-event .agenda-mark { background:#8a94a6; }
 .agenda-time { color:var(--muted); font-size:12px; white-space:pre-line; font-variant-numeric:tabular-nums; }
 .agenda-mark { border-radius:8px; background:var(--primary); }
 .agenda-title { display:block; font-size:14px; font-weight:760; }
 .agenda-description { margin-top:3px; color:var(--muted); font-size:12px; }
 .view-switcher {
-  position:relative; z-index:15; min-height:calc(62px + env(safe-area-inset-bottom));
+  position:relative; z-index:15; height:calc(62px + env(safe-area-inset-bottom)); min-height:0;
   padding:0 8px env(safe-area-inset-bottom); display:grid; grid-template-columns:1fr 1fr;
   border-top:1px solid var(--line); background:var(--surface);
   box-shadow:0 -3px 12px #1118270a;
@@ -159,6 +174,9 @@ button { -webkit-tap-highlight-color:transparent; }
 }
 .field textarea { min-height:76px; resize:vertical; }
 .field input:focus,.field textarea:focus { border-color:var(--primary); box-shadow:0 0 0 3px #3478f61f; }
+.check-label { display:flex !important; align-items:center; gap:9px; margin:0 !important; color:var(--text) !important; font-size:14px !important; cursor:pointer; }
+.check-label input { width:18px; height:18px; accent-color:var(--primary); }
+.all-day-help { margin:6px 0 0; color:var(--muted); font-size:11px; }
 .reminder-list { display:grid; gap:8px; }
 .reminder-row { display:grid; grid-template-columns:minmax(0,1fr) 42px; gap:7px; }
 .reminder-row select,.reminder-row input {
@@ -201,6 +219,7 @@ button { -webkit-tap-highlight-color:transparent; }
 }
 @media (prefers-color-scheme:dark) {
   :root { --bg:#11151b; --surface:#191e26; --text:#eef1f6; --muted:#a9b0bd; --line:#303743; --event:#17345a; --event-text:#dceaff; --primary-soft:#203451; }
+  .calendar-event.schedule-event,.agenda-event.schedule-event { background:#292f39; color:#c7cdd7; }
   .modal-sheet { background:#20252e; color:#f0f2f6; }
   .field input,.field textarea,.reminder-row select,.reminder-row input { background:#292f39; border-color:#4a5261; color:#fff; }
   .modal-close,.action-button.secondary { background:#323944; color:#fff; }
@@ -235,6 +254,7 @@ button { -webkit-tap-highlight-color:transparent; }
       <div class="field"><label for="title">Название</label><input id="title" maxlength="255" required placeholder="Новое событие"></div>
       <div class="field"><label for="start-at">Начало</label><input id="start-at" type="datetime-local" required></div>
       <div class="field"><label for="end-at">Окончание</label><input id="end-at" type="datetime-local" required></div>
+      <div class="field"><label class="check-label"><input id="all-day" type="checkbox"> Весь день</label><p class="all-day-help">Не занимает часы и может пересекаться с расписанием.</p></div>
       <div class="field"><label for="description">Описание</label><textarea id="description" placeholder="Детали"></textarea></div>
       <div class="field">
         <label>Уведомления</label>
@@ -259,6 +279,7 @@ button { -webkit-tap-highlight-color:transparent; }
       <div class="field"><label for="editTitle">Название</label><input id="editTitle" maxlength="255" required></div>
       <div class="field"><label for="editStart">Начало</label><input id="editStart" type="datetime-local" required></div>
       <div class="field"><label for="editEnd">Окончание</label><input id="editEnd" type="datetime-local" required></div>
+      <div class="field"><label class="check-label"><input id="editAllDay" type="checkbox"> Весь день</label><p class="all-day-help">Не занимает часы и может пересекаться с расписанием.</p></div>
       <div class="field"><label for="editDescription">Описание</label><textarea id="editDescription"></textarea></div>
       <div class="field">
         <label>Уведомления</label>
@@ -294,6 +315,12 @@ button { -webkit-tap-highlight-color:transparent; }
   const eventId = event => String(event.id);
   const eventStart = event => new Date(event.start);
   const eventEnd = event => new Date(event.end);
+  const eventAllDay = event => Boolean(event.all_day);
+  function eventOccursOnDay(event, date) {
+    if (!eventAllDay(event)) return sameDay(eventStart(event), date);
+    const day = dayStart(date);
+    return eventStart(event) <= day && eventEnd(event) > day;
+  }
   function dayStart(date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
   function addDays(date, count) { const result=new Date(date); result.setDate(result.getDate()+count); return result; }
   function monday(date) { const result=dayStart(date); result.setDate(result.getDate()-((result.getDay()+6)%7)); return result; }
@@ -362,7 +389,7 @@ button { -webkit-tap-highlight-color:transparent; }
         button.type='button'; button.className='week-day';
         if(sameDay(date,today)) button.classList.add('today-day');
         if(sameDay(date,state.date)) button.classList.add('selected');
-        if(state.events.some(event=>sameDay(eventStart(event),date))) button.classList.add('has-events');
+        if(state.events.some(event=>eventOccursOnDay(event,date))) button.classList.add('has-events');
         const name=document.createElement('span'); name.className='week-day-name'; name.textContent=shortDayFormat.format(date).replace('.','');
         const number=document.createElement('span'); number.className='week-day-number'; number.textContent=date.getDate();
         button.append(name,number);
@@ -389,7 +416,7 @@ button { -webkit-tap-highlight-color:transparent; }
     },120);
   });
   function eventsForSelectedDay() {
-    return state.events.filter(event=>sameDay(eventStart(event),state.date)).sort((a,b)=>eventStart(a)-eventStart(b));
+    return state.events.filter(event=>eventOccursOnDay(event,state.date)).sort((a,b)=>eventStart(a)-eventStart(b));
   }
   function layoutEvents(events) {
     let group=[], groupEnd=null;
@@ -437,6 +464,24 @@ button { -webkit-tap-highlight-color:transparent; }
       if(state.selectedEventId!==eventId(event)) { selectEvent(event); return; }
       openEditor(event);
     });
+    return node;
+  }
+  function makeAllDayNode(event) {
+    const node=document.createElement('button'); node.type='button';
+    node.className='all-day-event'+(event.is_completed?' done':'')+(state.selectedEventId===eventId(event)?' selected':'');
+    node.textContent=event.title;
+    node.onclick=()=>{
+      if(state.selectedEventId!==eventId(event)) { selectEvent(event); return; }
+      openEditor(event);
+    };
+    return node;
+  }
+  function makeScheduleNode(event) {
+    const node=document.createElement('div');
+    node.className='calendar-event schedule-event';
+    node.innerHTML='<span class="event-title"></span><span class="event-time"></span>';
+    node.querySelector('.event-title').textContent=`Занятие · ${event.title}`;
+    applyGeometry(node,eventStart(event),eventEnd(event));
     return node;
   }
   function bindDrag(node,event) {
@@ -514,39 +559,53 @@ button { -webkit-tap-highlight-color:transparent; }
       row.append(label); root.append(row);
     }
     const layer=document.createElement('div'); layer.className='events-layer';
-    const events=layoutEvents(eventsForSelectedDay());
+    const dayEvents=eventsForSelectedDay();
+    const allDayEvents=dayEvents.filter(event=>eventAllDay(event));
+    const schedule=dayEvents.filter(event=>event.kind==='schedule');
+    const events=layoutEvents(dayEvents.filter(event=>event.kind!=='schedule'&&!eventAllDay(event)));
+    schedule.forEach(event=>layer.append(makeScheduleNode(event)));
     events.forEach(event=>layer.append(makeEventNode(event)));
     layer.addEventListener('click',event=>emptySlotClick(event,layer));
     root.append(layer);
+    if(allDayEvents.length) {
+      const lane=document.createElement('div'); lane.className='all-day-lane';
+      allDayEvents.forEach(event=>lane.append(makeAllDayNode(event))); root.append(lane);
+    }
     if(sameDay(state.date,new Date())) {
       const line=document.createElement('div'); line.className='now-line';
       line.style.top=`${minuteOfDay(new Date())/60*HOUR_HEIGHT}px`; root.append(line);
     }
-    if(!events.length) {
+    if(!dayEvents.length) {
       const empty=document.createElement('div'); empty.className='empty-state';
       empty.textContent='На этот день ничего не запланировано'; root.append(empty);
     }
   }
   function agendaNode(event) {
     const button=document.createElement('button'); button.type='button';
-    button.className='agenda-event'+(state.selectedEventId===eventId(event)?' selected':'');
+    const schedule=event.kind==='schedule', allDay=eventAllDay(event);
+    button.className='agenda-event'+(schedule?' schedule-event':'')+(allDay?' all-day':'')+(state.selectedEventId===eventId(event)?' selected':'');
     button.innerHTML='<span class="agenda-time"></span><span class="agenda-mark"></span><span><b class="agenda-title"></b><span class="agenda-description"></span></span>';
-    button.querySelector('.agenda-time').textContent=`${timeFormat.format(eventStart(event))}\n${timeFormat.format(eventEnd(event))}`;
-    button.querySelector('.agenda-title').textContent=event.title;
+    button.querySelector('.agenda-time').textContent=allDay?'Весь\nдень':`${timeFormat.format(eventStart(event))}\n${timeFormat.format(eventEnd(event))}`;
+    button.querySelector('.agenda-title').textContent=(schedule?'Занятие · ':'')+event.title;
     button.querySelector('.agenda-description').textContent=event.description||'';
     button.onclick=()=>{
+      if(schedule) return;
       if(state.selectedEventId!==eventId(event)) { state.selectedEventId=eventId(event); renderAgenda(); }
       else openEditor(event);
     };
     return button;
   }
   function renderAgenda() {
-    const root=byId('agendaScroll'); root.replaceChildren(); let previous='';
-    [...state.events].sort((a,b)=>eventStart(a)-eventStart(b)).forEach(event=>{
-      const current=dayKey(eventStart(event));
+    const root=byId('agendaScroll'); root.replaceChildren(); let previous=''; const rows=[];
+    state.events.forEach(event=>{
+      if(!eventAllDay(event)) { rows.push({event,date:eventStart(event)}); return; }
+      for(let date=dayStart(eventStart(event)); date<eventEnd(event); date=addDays(date,1)) rows.push({event,date});
+    });
+    rows.sort((a,b)=>a.date-b.date || eventStart(a.event)-eventStart(b.event)).forEach(({event,date})=>{
+      const current=dayKey(date);
       if(current!==previous) {
         const heading=document.createElement('h3'); heading.className='agenda-date';
-        heading.textContent=capitalize(dayFormat.format(eventStart(event))); root.append(heading); previous=current;
+        heading.textContent=capitalize(dayFormat.format(date)); root.append(heading); previous=current;
       }
       root.append(agendaNode(event));
     });
@@ -562,7 +621,7 @@ button { -webkit-tap-highlight-color:transparent; }
   function render() { renderWeeks(); renderTimeline(); renderAgenda(); updateView(); }
   function scrollToRelevantTime() {
     if(state.view!=='timeline') return;
-    const events=eventsForSelectedDay(), now=new Date();
+    const events=eventsForSelectedDay().filter(event=>!eventAllDay(event)), now=new Date();
     const minutes=sameDay(state.date,now)?minuteOfDay(now):(events.length?minuteOfDay(eventStart(events[0])):8*60);
     requestAnimationFrame(()=>{byId('timelineScroll').scrollTop=Math.max(0,minutes/60*HOUR_HEIGHT-150);});
   }
@@ -595,6 +654,24 @@ button { -webkit-tap-highlight-color:transparent; }
   function closeModal(id) { byId(id).classList.remove('open'); }
   function showError(id,message) { const node=byId(id); node.textContent=message; node.style.display='block'; }
   function hideError(id) { byId(id).style.display='none'; }
+  function allDayBounds(start, end) {
+    const normalizedStart=dayStart(start);
+    let inclusiveEnd=dayStart(end);
+    if(inclusiveEnd<normalizedStart) inclusiveEnd=normalizedStart;
+    return {start:normalizedStart,end:addDays(inclusiveEnd,1)};
+  }
+  function bindAllDayToggle(toggleId,startId,endId) {
+    byId(toggleId).onchange=()=>{
+      const start=new Date(byId(startId).value), end=new Date(byId(endId).value);
+      if(Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+      if(byId(toggleId).checked) {
+        byId(startId).value=inputValue(dayStart(start));
+        byId(endId).value=inputValue(dayStart(end<start?start:end));
+      } else if(end<=start) {
+        byId(endId).value=inputValue(new Date(start.getTime()+3600000));
+      }
+    };
+  }
   function openCreate(slotStart=null) {
     const start=slotStart?new Date(slotStart):new Date(state.date), now=new Date();
     if(!slotStart) {
@@ -602,6 +679,7 @@ button { -webkit-tap-highlight-color:transparent; }
     }
     const end=new Date(start.getTime()+3600000);
     byId('title').value=''; byId('description').value='';
+    byId('all-day').checked=false;
     byId('start-at').value=inputValue(start); byId('end-at').value=inputValue(end);
     renderReminderEditor('createReminders',start,[],'auto');
     hideError('createError'); openModal('createModal');
@@ -609,7 +687,9 @@ button { -webkit-tap-highlight-color:transparent; }
   function openEditor(event) {
     state.activeEvent=event;
     byId('editTitle').value=event.title; byId('editDescription').value=event.description||'';
-    byId('editStart').value=inputValue(eventStart(event)); byId('editEnd').value=inputValue(eventEnd(event));
+    byId('editAllDay').checked=eventAllDay(event);
+    byId('editStart').value=inputValue(eventStart(event));
+    byId('editEnd').value=inputValue(eventAllDay(event)?addDays(eventEnd(event),-1):eventEnd(event));
     renderReminderEditor('editReminders',eventStart(event),event.reminders||[],'manual');
     byId('completeEvent').textContent=event.is_completed?'Вернуть в работу':'Выполнено';
     hideError('editError'); openModal('editModal');
@@ -617,11 +697,13 @@ button { -webkit-tap-highlight-color:transparent; }
   byId('createForm').onsubmit=async submit=>{
     submit.preventDefault(); const save=byId('createSave'); save.disabled=true; hideError('createError');
     try {
-      const start=new Date(byId('start-at').value), end=new Date(byId('end-at').value);
+      let start=new Date(byId('start-at').value), end=new Date(byId('end-at').value);
+      const allDay=byId('all-day').checked;
+      if(allDay) ({start,end}=allDayBounds(start,end));
       const reminders=collectReminderTimes('createReminders',start);
       await api(CONFIG.apiBase,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
         title:byId('title').value.trim(),description:byId('description').value.trim(),
-        start_at:start.toISOString(),end_at:end.toISOString(),reminders
+        start_at:start.toISOString(),end_at:end.toISOString(),reminders,all_day:allDay
       })});
       state.date=dayStart(start); closeModal('createModal'); await loadEvents(); toast('Мероприятие добавлено');
     } catch(error) { showError('createError',error.message); } finally { save.disabled=false; }
@@ -630,12 +712,14 @@ button { -webkit-tap-highlight-color:transparent; }
     submit.preventDefault(); if(!state.activeEvent)return;
     const save=byId('editSave'); save.disabled=true; hideError('editError');
     try {
-      const start=new Date(byId('editStart').value), end=new Date(byId('editEnd').value);
+      let start=new Date(byId('editStart').value), end=new Date(byId('editEnd').value);
+      const allDay=byId('editAllDay').checked;
+      if(allDay) ({start,end}=allDayBounds(start,end));
       const reminders=collectReminderTimes('editReminders',start);
       await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}`,{
         method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({
           title:byId('editTitle').value.trim(),description:byId('editDescription').value.trim(),
-          start_at:start.toISOString(),end_at:end.toISOString(),reminders
+          start_at:start.toISOString(),end_at:end.toISOString(),reminders,all_day:allDay
         })
       });
       state.date=dayStart(start); closeModal('editModal'); await loadEvents(); toast('Изменения сохранены');
@@ -663,6 +747,8 @@ button { -webkit-tap-highlight-color:transparent; }
   byId('todayButton').onclick=()=>{state.date=dayStart(new Date());state.selectedEventId=null;state.view='timeline';render();scrollToRelevantTime();};
   byId('todayButton').textContent='Сегодня';
   byId('addEventButton').onclick=openCreate;
+  bindAllDayToggle('all-day','start-at','end-at');
+  bindAllDayToggle('editAllDay','editStart','editEnd');
   document.querySelectorAll('[data-add-reminder]').forEach(button=>button.onclick=()=>{
     const container=byId(button.dataset.addReminder);
     if(container.children.length>=10) { toast('Можно добавить не больше 10 уведомлений'); return; }

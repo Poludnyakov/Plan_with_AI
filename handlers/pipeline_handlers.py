@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from services import ActionPipelineService
 from models import Event, Reminder, EventStatus, ReminderStatus
+from reminder_service import acknowledge_delivery
 from repositories import EventRepository
 
 logger = logging.getLogger("PipelineHandlers")
@@ -322,7 +323,9 @@ async def handle_complete_event_callback(callback: CallbackQuery, db_session: As
             return
             
         event.is_completed = True
-        await db_session.commit()
+        await acknowledge_delivery(
+            db_session, "telegram", event.id, callback.from_user.id
+        )
         
         await callback.answer("✅ Задача выполнена!")
         await callback.message.edit_text(

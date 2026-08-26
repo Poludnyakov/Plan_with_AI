@@ -10,8 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from anonymizer import DataAnonymizer
-from account_service import intelligent_reminders_enabled
-from intelligent_reminders import build_reminders
+from reminder_service import build_user_reminders
 from interval_ai_service import extract_intervals
 from .calendar import delete_max_yandex, sync_max_yandex
 from interval_pipeline import REMINDER_OFFSETS, normalize_datetime
@@ -32,9 +31,16 @@ def aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def format_interval(start_at: datetime, end_at: datetime, timezone_name="Europe/Moscow") -> str:
+def format_interval(
+    start_at: datetime, end_at: datetime, timezone_name="Europe/Moscow", all_day: bool = False,
+) -> str:
     zone = ZoneInfo(timezone_name)
     start, end = aware(start_at).astimezone(zone), aware(end_at).astimezone(zone)
+    if all_day:
+        last_day = (end - timedelta(days=1)).date()
+        if start.date() == last_day:
+            return f"{start:%d.%m.%Y} · весь день"
+        return f"{start:%d.%m}–{last_day:%d.%m.%Y} · весь день"
     if start.date() == end.date():
         return f"{start:%d.%m.%Y}, {start:%H:%M}–{end:%H:%M}"
     return f"{start:%d.%m.%Y %H:%M} — {end:%d.%m.%Y %H:%M}"
@@ -73,7 +79,6 @@ class MaxEventService:
 
     async def create_drafts(self, db: AsyncSession, max_user_id: int, extracted: list[dict]) -> list[MaxEvent]:
         user = await self.user(db, max_user_id)
-        smart_enabled = await intelligent_reminders_enabled(db, "max", max_user_id)
         now = datetime.now(timezone.utc)
         created: list[MaxEvent] = []
         for item in extracted:
@@ -83,20 +88,24 @@ class MaxEventService:
                 raise ValueError("Окончание мероприятия должно быть позже начала.")
             event = MaxEvent(
                 user_id=user.id,
-                title=(item.get("title") or "Без названия")[:255],
-                description=item.get("description") or "",
+                title=self.anonymizer.clean_event_title(item.get("title", "")),
+                description=self.anonymizer.clean_display_text(
+                    item.get("description", "")
+                ),
                 deadline=end,
                 status="draft",
             )
             db.add(event)
             await db.flush()
-            db.add(MaxEventTiming(event_id=event.id, start_at=start, end_at=end))
-            reminder_times = await build_reminders(
-                smart_enabled, event.title, event.description or "",
-                start, end, user.timezone, now,
+            db.add(MaxEventTiming(event_id=event.id, start_at=start, end_at=end, all_day=bool(item.get("all_day"))))
+
+            reminder_times = await build_user_reminders(
+                db, "max", max_user_id, event.title, event.description or "",
+                start, end, user.timezone, now, all_day=bool(item.get("all_day")),
             )
             for remind_at in reminder_times:
                 db.add(MaxReminder(event_id=event.id, remind_at=remind_at, status="pending"))
+
             created.append(event)
         await db.commit()
         for event in created:
@@ -144,18 +153,21 @@ class MaxEventService:
         if event.status == "confirmed":
             return "confirmed", event
         timing = event.timing
-        result = await db.execute(
-            select(MaxEvent, MaxEventTiming)
-            .join(MaxEventTiming)
-            .filter(
-                MaxEvent.user_id == event.user_id,
-                MaxEvent.id != event.id,
-                MaxEvent.status == "confirmed",
-                MaxEventTiming.start_at < timing.end_at,
-                MaxEventTiming.end_at > timing.start_at,
+        conflict = None
+        if not bool(getattr(timing, "all_day", False)):
+            result = await db.execute(
+                select(MaxEvent, MaxEventTiming)
+                .join(MaxEventTiming)
+                .filter(
+                    MaxEvent.user_id == event.user_id,
+                    MaxEvent.id != event.id,
+                    MaxEvent.status == "confirmed",
+                    MaxEventTiming.all_day.is_(False),
+                    MaxEventTiming.start_at < timing.end_at,
+                    MaxEventTiming.end_at > timing.start_at,
+                )
             )
-        )
-        conflict = result.first()
+            conflict = result.first()
         if conflict:
             await db.delete(event)
             await db.commit()
@@ -165,6 +177,7 @@ class MaxEventService:
         asyncio.create_task(sync_max_yandex(
             event.title, timing.start_at, timing.end_at, event.description or "",
             event_id=event.id,
+            all_day=bool(getattr(timing, "all_day", False)),
         ))
         return "confirmed", event
 

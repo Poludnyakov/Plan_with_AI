@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from account_service import intelligent_reminders_enabled, linked_identities
-from intelligent_reminders import build_reminders
+from account_service import linked_identities
+from reminder_service import build_user_reminders
 from interval_calendar_sync import delete_yandex_interval, sync_yandex_interval
 from interval_models import EventTiming
 from interval_pipeline import normalize_datetime
@@ -170,10 +170,15 @@ async def find_linked_conflict(
     start_at: datetime,
     end_at: datetime,
     exclude_ref: str | None = None,
+    all_day: bool = False,
 ) -> CalendarEntry | None:
     start, end = aware(start_at), aware(end_at)
+    if all_day:
+        return None
     for entry in await list_linked_events(db, platform, external_id):
         if exclude_ref and entry.ref == exclude_ref:
+            continue
+        if bool(getattr(entry.timing, "all_day", False)):
             continue
         if aware(entry.timing.start_at) < end and aware(entry.timing.end_at) > start:
             return entry
@@ -205,14 +210,14 @@ async def _replace_reminders(
     explicit_times: list[datetime] | None = None,
 ) -> None:
     if explicit_times is None:
-        smart = await intelligent_reminders_enabled(db, platform, external_id)
-        times = await build_reminders(
-            smart,
+        times = await build_user_reminders(
+            db, platform, external_id,
             entry.event.title,
             entry.event.description or "",
             aware(entry.timing.start_at),
             aware(entry.timing.end_at),
             entry.timezone_name,
+            all_day=bool(getattr(entry.timing, "all_day", False)),
         )
     else:
         times = sorted({aware(value) for value in explicit_times})
@@ -259,11 +264,12 @@ async def create_linked_event(
     start_at: datetime,
     end_at: datetime,
     reminder_times: list[datetime] | None = None,
+    all_day: bool = False,
 ) -> CalendarEntry:
     user = await ensure_platform_user(db, platform, external_id)
     start = normalize_datetime(start_at, user.timezone)
     end = normalize_datetime(end_at, user.timezone)
-    overlap = await find_linked_conflict(db, platform, external_id, start, end)
+    overlap = await find_linked_conflict(db, platform, external_id, start, end, all_day=all_day)
     if overlap:
         raise ValueError(f"Время пересекается с мероприятием «{overlap.event.title}»")
     if platform == "telegram":
@@ -273,7 +279,7 @@ async def create_linked_event(
         )
         db.add(event)
         await db.flush()
-        timing = EventTiming(event_id=event.id, start_at=start, end_at=end)
+        timing = EventTiming(event_id=event.id, start_at=start, end_at=end, all_day=all_day)
     else:
         event = MaxEvent(
             user_id=user.id, title=title.strip(), description=description.strip(),
@@ -281,7 +287,7 @@ async def create_linked_event(
         )
         db.add(event)
         await db.flush()
-        timing = MaxEventTiming(event_id=event.id, start_at=start, end_at=end)
+        timing = MaxEventTiming(event_id=event.id, start_at=start, end_at=end, all_day=all_day)
     db.add(timing)
     entry = CalendarEntry(platform, event, timing, user.timezone)
     await _replace_reminders(
@@ -302,16 +308,18 @@ async def update_linked_event(
     title: str | None = None,
     description: str | None = None,
     reminder_times: list[datetime] | None = None,
+    all_day: bool | None = None,
 ) -> CalendarEntry:
     entry = await get_owned_entry(db, platform, external_id, event_ref)
     if not entry:
         raise LookupError("Мероприятие не найдено")
     start = normalize_datetime(start_at, entry.timezone_name)
     end = normalize_datetime(end_at, entry.timezone_name)
+    is_all_day = bool(getattr(entry.timing, "all_day", False)) if all_day is None else all_day
     if end <= start:
         raise ValueError("Окончание должно быть позже начала")
     overlap = await find_linked_conflict(
-        db, platform, external_id, start, end, exclude_ref=entry.ref
+        db, platform, external_id, start, end, exclude_ref=entry.ref, all_day=is_all_day
     )
     if overlap:
         raise ValueError(f"Время пересекается с мероприятием «{overlap.event.title}»")
@@ -326,9 +334,11 @@ async def update_linked_event(
     )
     if persisted_timing:
         persisted_timing.start_at, persisted_timing.end_at = start, end
+        persisted_timing.all_day = is_all_day
         entry.timing = persisted_timing
     else:
         entry.timing.start_at, entry.timing.end_at = start, end
+        entry.timing.all_day = is_all_day
         db.add(entry.timing)
     await _replace_reminders(
         db, entry, platform, external_id, explicit_times=reminder_times
@@ -369,11 +379,15 @@ def _sync(entry: CalendarEntry) -> None:
         asyncio.create_task(sync_yandex_interval(
             entry.event.title, entry.timing.start_at, entry.timing.end_at,
             entry.event.description or "", event_id=entry.event.id,
+            all_day=bool(getattr(entry.timing, "all_day", False)),
+            timezone_name=entry.timezone_name,
         ))
     else:
         asyncio.create_task(sync_max_yandex(
             entry.event.title, entry.timing.start_at, entry.timing.end_at,
             entry.event.description or "", entry.event.id,
+            all_day=bool(getattr(entry.timing, "all_day", False)),
+            timezone_name=entry.timezone_name,
         ))
 
 
@@ -384,6 +398,7 @@ def payload(entry: CalendarEntry) -> dict:
         "title": entry.event.title,
         "description": entry.event.description or "",
         "start": aware(entry.timing.start_at).isoformat(),
+        "all_day": bool(getattr(entry.timing, "all_day", False)),
         "end": aware(entry.timing.end_at).isoformat(),
         "reminders": [aware(value).isoformat() for value in entry.reminders],
         "is_completed": entry.event.is_completed,

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import caldav
 import vobject
@@ -15,13 +16,14 @@ logger = logging.getLogger("IntervalCalendarSync")
 def yandex_interval_uid(event_id: int) -> str:
     return f"planiruy-event-{event_id}@planwithai.ru"
 
-
 async def sync_yandex_interval(
     title: str,
     start_at: datetime,
     end_at: datetime,
     description: str = "",
     event_id: int | None = None,
+    all_day: bool = False,
+    timezone_name: str = "Europe/Moscow",
 ) -> None:
     """Best-effort CalDAV sync that never breaks Telegram confirmation."""
     if not settings.YANDEX_EMAIL or not settings.YANDEX_APP_PASSWORD:
@@ -39,8 +41,13 @@ async def sync_yandex_interval(
         calendar_data = vobject.iCalendar()
         item = calendar_data.add("vevent")
         item.add("summary").value = title
-        item.add("dtstart").value = start_at
-        item.add("dtend").value = end_at
+        if all_day:
+            zone = ZoneInfo(timezone_name)
+            item.add("dtstart").value = start_at.astimezone(zone).date()
+            item.add("dtend").value = end_at.astimezone(zone).date()
+        else:
+            item.add("dtstart").value = start_at
+            item.add("dtend").value = end_at
         item.add("description").value = description or ""
         item.add("uid").value = (
             yandex_interval_uid(event_id) if event_id is not None else str(uuid.uuid4())

@@ -354,8 +354,12 @@ class ActionPipelineService:
 
             created_events = []
             for event_data in extracted_events_json:
-                title = event_data.get("title", "Без названия")
-                description = event_data.get("description", "")
+                title = self.anonymizer.clean_event_title(
+                    event_data.get("title", "")
+                )
+                description = self.anonymizer.clean_display_text(
+                    event_data.get("description", "")
+                )
                 
                 # Parse deadline ISO string
                 deadline_str = event_data.get("deadline")
@@ -491,9 +495,13 @@ class ActionPipelineService:
                 title = event_data.get("title", "Без названия")
                 description = event_data.get("description", "")
                 
-                # Anonymize event text fields to ensure data protection
-                title = self.anonymizer.anonymize_text(title)
-                description = self.anonymizer.anonymize_text(description)
+                # Anonymize PII, then remove internal mask labels from the UI.
+                title = self.anonymizer.clean_event_title(
+                    self.anonymizer.anonymize_text(title)
+                )
+                description = self.anonymizer.clean_display_text(
+                    self.anonymizer.anonymize_text(description)
+                )
 
                 # Parse deadline ISO string
                 deadline_str = event_data.get("deadline")

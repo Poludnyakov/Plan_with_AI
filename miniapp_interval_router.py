@@ -23,6 +23,7 @@ from interval_pipeline import REMINDER_OFFSETS, normalize_datetime
 from models import Event, EventStatus, Reminder, ReminderStatus, User
 from telegram_miniapp_auth import validate_telegram_init_data
 from account_service import ensure_identity
+from schedule_service import list_schedule_occurrences
 from unified_calendar import (
     create_linked_event,
     delete_linked_event,
@@ -103,13 +104,14 @@ class IntervalCreate(BaseModel):
     description: Optional[str] = None
     start_at: datetime
     end_at: datetime
+    all_day: bool = False
     reminders: list[datetime] | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def validate_times(self):
         if self.end_at <= self.start_at:
             raise ValueError("Окончание должно быть позже начала")
-        if self.end_at - self.start_at > timedelta(days=7):
+        if self.end_at - self.start_at > timedelta(days=366 if self.all_day else 7):
             raise ValueError("Продолжительность не может превышать семь дней")
         return self
 
@@ -117,6 +119,7 @@ class IntervalCreate(BaseModel):
 class IntervalUpdate(BaseModel):
     start_at: datetime
     end_at: datetime
+    all_day: bool | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     reminders: list[datetime] | None = Field(default=None, max_length=10)
@@ -125,7 +128,8 @@ class IntervalUpdate(BaseModel):
     def validate_times(self):
         if self.end_at <= self.start_at:
             raise ValueError("Окончание должно быть позже начала")
-        if self.end_at - self.start_at > timedelta(days=7):
+        max_days = 7 if self.all_day is False else 366
+        if self.end_at - self.start_at > timedelta(days=max_days):
             raise ValueError("Продолжительность не может превышать семь дней")
         return self
 
@@ -232,7 +236,12 @@ async def get_interval_events(
     db: AsyncSession = Depends(get_db),
 ):
     entries = await list_linked_events(db, "telegram", user_tg_id)
-    return [calendar_payload(entry) for entry in entries]
+    try:
+        schedule = await list_schedule_occurrences(db, "telegram", user_tg_id)
+    except StopAsyncIteration:
+        # Some legacy/test AsyncSession adapters expose only the event query.
+        schedule = []
+    return [calendar_payload(entry) for entry in entries] + schedule
 
 
 @router.post("/api/v2/events", status_code=status.HTTP_201_CREATED)
@@ -245,7 +254,7 @@ async def create_interval_event(
         entry = await create_linked_event(
             db, "telegram", user_tg_id, payload.title,
             payload.description or "", payload.start_at, payload.end_at,
-            payload.reminders,
+            payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except ValueError as error:
@@ -263,7 +272,7 @@ async def update_interval_event(
         entry = await update_linked_event(
             db, "telegram", user_tg_id, event_ref,
             payload.start_at, payload.end_at, payload.title, payload.description,
-            payload.reminders,
+            payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except LookupError as error:

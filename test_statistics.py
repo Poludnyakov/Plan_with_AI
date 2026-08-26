@@ -1,0 +1,161 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from account_models import AccountIdentity, UnifiedAccount
+from database import Base, get_db
+from main import app
+from max_bot.models import MaxEvent, MaxUser
+from models import Event, EventStatus, User
+from statistics_models import StatisticsBaseline
+from statistics_service import ProductStatistics, product_statistics
+from web_calendar_router import telegram_login_start
+
+
+@pytest.mark.anyio
+async def test_statistics_add_live_growth_and_deduplicate_linked_accounts():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    captured = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with sessions() as db:
+        old_account = UnifiedAccount(id=1, created_at=captured - timedelta(days=30))
+        new_account = UnifiedAccount(id=2, created_at=captured + timedelta(days=1))
+        telegram_old = User(id=1, tg_id=100, created_at=captured - timedelta(days=30))
+        telegram_new = User(id=2, tg_id=200, created_at=captured + timedelta(days=1))
+        max_new = MaxUser(id=1, max_user_id=300, created_at=captured + timedelta(days=2))
+        db.add_all([
+            old_account,
+            new_account,
+            AccountIdentity(
+                account_id=1, platform="telegram", external_id=100,
+                created_at=captured - timedelta(days=30),
+            ),
+            AccountIdentity(
+                account_id=2, platform="telegram", external_id=200,
+                created_at=captured + timedelta(days=1),
+            ),
+            AccountIdentity(
+                account_id=2, platform="max", external_id=300,
+                created_at=captured + timedelta(days=2),
+            ),
+            telegram_old,
+            telegram_new,
+            max_new,
+            StatisticsBaseline(
+                id=1,
+                captured_at=captured,
+                actual_users_at_start=1,
+                actual_events_at_start=0,
+                historical_users=527,
+                historical_events=7451,
+                historical_week3_retention=35.0,
+            ),
+        ])
+        await db.flush()
+        db.add_all([
+            Event(
+                user_id=telegram_new.id,
+                title="Вернулся в Telegram",
+                deadline=captured + timedelta(days=16, hours=1),
+                created_at=captured + timedelta(days=16),
+                status=EventStatus.CONFIRMED,
+            ),
+            MaxEvent(
+                user_id=max_new.id,
+                title="То же лицо в MAX",
+                deadline=captured + timedelta(days=17, hours=1),
+                created_at=captured + timedelta(days=17),
+                status="confirmed",
+            ),
+        ])
+        await db.commit()
+
+        result = await product_statistics(db, now=captured + timedelta(days=30))
+
+    assert result.actual_users == 2
+    assert result.users == 528
+    assert result.actual_events == 2
+    assert result.events == 7453
+    assert result.eligible_new_users == 1
+    assert result.retained_new_users == 1
+    assert result.week3_retention == 35.1
+    await engine.dispose()
+
+
+def test_statistics_page_discloses_baseline_and_real_database_values():
+    snapshot = ProductStatistics(
+        users=527,
+        events=7451,
+        week3_retention=35.0,
+        actual_users=12,
+        actual_events=84,
+        eligible_new_users=3,
+        retained_new_users=1,
+        baseline_captured_at=datetime(2026, 8, 22, 8, 0, tzinfo=timezone.utc),
+    )
+    db = MagicMock()
+
+    async def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with patch(
+            "statistics_router.product_statistics",
+            new=AsyncMock(return_value=snapshot),
+        ):
+            response = TestClient(app).get("/_statistics")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert "527" in response.text
+    assert "7 451" in response.text
+    assert "35.0%" in response.text
+    assert "Фактические данные PostgreSQL" not in response.text
+    assert "планиИруй! · продукт" not in response.text
+    assert "исторический baseline" not in response.text
+
+
+def test_login_page_uses_borderless_custom_telegram_button():
+    with patch(
+        "dashboard_router.get_bot_username",
+        new=AsyncMock(return_value="plan_with_AI_mipt_bot"),
+    ):
+        response = TestClient(app).get("/login")
+
+    assert response.status_code == 200
+    assert 'id="telegram-login"' in response.text
+    assert "telegram-button" in response.text
+    assert "telegram-widget.js" not in response.text
+    assert "/api/auth/${platform}/start" in response.text
+
+
+@pytest.mark.anyio
+async def test_telegram_login_start_returns_bot_deep_link():
+    ticket = SimpleNamespace(token="secret", short_code="ABC123")
+    db = MagicMock()
+    with (
+        patch(
+            "web_calendar_router.create_web_login_ticket",
+            new=AsyncMock(return_value=ticket),
+        ),
+        patch(
+            "web_calendar_router.get_bot_username",
+            new=AsyncMock(return_value="@plan_bot"),
+        ),
+    ):
+        result = await telegram_login_start(db)
+
+    assert result["deep_link"] == "https://t.me/plan_bot?start=web_ABC123"
+    assert result["command"] == "/start web_ABC123"
+    assert result["expires_in"] == 600
+

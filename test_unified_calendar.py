@@ -24,7 +24,7 @@ async def test_linked_accounts_share_edit_and_conflict_across_platforms():
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=4)
-    with patch("unified_calendar.build_reminders", new_callable=AsyncMock, return_value=[]), \
+    with patch("unified_calendar.build_user_reminders", new_callable=AsyncMock, return_value=[]), \
          patch("unified_calendar._sync"):
         async with sessions() as db:
             code = await create_link_code(db, "telegram", 10101)
@@ -100,4 +100,28 @@ async def test_manual_reminders_are_returned_and_can_be_removed():
                 max_start, max_start + timedelta(hours=1), reminder_times=[],
             )
             assert (await db.execute(select(MaxReminder))).scalars().all() == []
+    await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_all_day_events_can_overlap_timed_events_and_are_exposed_in_payload():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=5)
+    with patch("unified_calendar.build_user_reminders", new_callable=AsyncMock, return_value=[]), \
+         patch("unified_calendar._sync"):
+        async with sessions() as db:
+            timed = await create_linked_event(
+                db, "telegram", 50505, "Встреча", "", start + timedelta(hours=10),
+                start + timedelta(hours=11),
+            )
+            all_day = await create_linked_event(
+                db, "telegram", 50505, "Поездка", "", start,
+                start + timedelta(days=3), all_day=True,
+            )
+            assert timed.ref != all_day.ref
+            assert all_day.timing.all_day is True
+            assert payload(all_day)["all_day"] is True
     await engine.dispose()

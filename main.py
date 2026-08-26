@@ -3,7 +3,7 @@ from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import init_db, get_db
+from database import async_session_maker, init_db, get_db
 from schemas import (
     UserCreate, 
     UserResponse, 
@@ -12,6 +12,7 @@ from schemas import (
     EventResponse
 )
 from services import UserService, EventService
+from statistics_service import ensure_statistics_baseline
 from config import settings
 
 
@@ -24,6 +25,8 @@ async def lifespan(app: FastAPI):
     print("[PLANIRUY-MVP] Starting up: initializing database tables...")
     try:
         await init_db()
+        async with async_session_maker() as db:
+            await ensure_statistics_baseline(db)
         print("[PLANIRUY-MVP] Database tables initialized successfully.")
     except Exception as e:
         print(f"[PLANIRUY-MVP] Critical error during database initialization: {e}")
@@ -44,6 +47,8 @@ from dashboard_router import router as dashboard_router
 app.include_router(dashboard_router)
 from web_calendar_router import router as web_calendar_router
 app.include_router(web_calendar_router)
+from statistics_router import router as statistics_router
+app.include_router(statistics_router)
 
 
 # ==========================================

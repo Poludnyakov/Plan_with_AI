@@ -188,12 +188,12 @@ class DataAnonymizer:
         
         try:
             matches = self.names_extractor(anonymized_text)
-            # Natasha may interpret sentence-initial event words such as
-            # "Контрольная" or "Домашка" as a surname/name. Keep multi-part
-            # names and plausible single names, but reject academic false positives.
+            # Filter matches to ensure they start with an uppercase letter.
+            # Russian proper names are capitalized, and this avoids false positives
+            # on lowercase common words like prepositions, nouns, and adjectives.
             matches_list = [
-                match for match in matches
-                if self._probable_name_match(match, anonymized_text)
+                m for m in matches 
+                if m.start < len(anonymized_text) and anonymized_text[m.start].isupper()
             ]
             
             if matches_list:

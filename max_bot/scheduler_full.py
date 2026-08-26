@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import or_, select
 
 from .models import MaxInboxUpdate
-from .scheduler import send_due_reminders
+from .scheduler import send_daily_summaries, send_due_reminders
 
 
 logger = logging.getLogger("MaxFullScheduler")
@@ -48,6 +48,11 @@ def setup_full_scheduler(client, handler, session_factory) -> AsyncIOScheduler:
     scheduler.add_job(
         retry_inbox, "interval", minutes=1, args=[handler, session_factory],
         id="max_inbox_retry", replace_existing=True,
+    )
+    scheduler.add_job(
+        send_daily_summaries, "interval", minutes=5,
+        args=[client, session_factory], id="max_daily_summaries",
+        replace_existing=True,
     )
     scheduler.start()
     return scheduler

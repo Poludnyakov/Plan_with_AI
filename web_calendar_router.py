@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from account_models import AccountIdentity, WebLoginTicket
 from account_service import aware, create_web_login_ticket, ensure_identity
-from dashboard_router import get_cookie_secret, verify_tg_id
+from dashboard_router import get_bot_username, get_cookie_secret, verify_tg_id
 from database import get_db
 from max_bot.config import settings as max_settings
 from unified_calendar import (
@@ -22,6 +22,7 @@ from unified_calendar import (
     toggle_linked_event,
     update_linked_event,
 )
+from schedule_service import list_schedule_occurrences
 
 
 router = APIRouter(tags=["Web calendar"])
@@ -74,13 +75,14 @@ class CalendarEventInput(BaseModel):
     description: str | None = None
     start_at: datetime
     end_at: datetime
+    all_day: bool = False
     reminders: list[datetime] | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def valid_interval(self):
         if self.end_at <= self.start_at:
             raise ValueError("Окончание должно быть позже начала")
-        if self.end_at - self.start_at > timedelta(days=7):
+        if self.end_at - self.start_at > timedelta(days=366 if self.all_day else 7):
             raise ValueError("Продолжительность не может превышать семь дней")
         return self
 
@@ -88,6 +90,7 @@ class CalendarEventInput(BaseModel):
 class CalendarEventUpdate(BaseModel):
     start_at: datetime
     end_at: datetime
+    all_day: bool | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     reminders: list[datetime] | None = Field(default=None, max_length=10)
@@ -113,6 +116,38 @@ async def web_calendar(request: Request, db: AsyncSession = Depends(get_db)):
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/api/auth/telegram/start")
+async def telegram_login_start(db: AsyncSession = Depends(get_db)):
+    ticket = await create_web_login_ticket(db, "telegram")
+    username = (await get_bot_username()).strip().lstrip("@")
+    return {
+        "token": ticket.token,
+        "code": ticket.short_code,
+        "deep_link": f"https://t.me/{username}?start=web_{ticket.short_code}",
+        "command": f"/start web_{ticket.short_code}",
+        "expires_in": 600,
+    }
+
+
+@router.get("/api/auth/telegram/status/{token}")
+async def telegram_login_status(token: str, db: AsyncSession = Depends(get_db)):
+    ticket = await db.get(WebLoginTicket, token)
+    if (
+        not ticket
+        or ticket.platform != "telegram"
+        or aware(ticket.expires_at) < datetime.now(aware(ticket.expires_at).tzinfo)
+    ):
+        raise HTTPException(status_code=404, detail="Ссылка входа истекла")
+    if not ticket.completed_at or ticket.account_id is None:
+        return {"status": "pending"}
+    response = JSONResponse({"status": "complete", "redirect": "/calendar"})
+    response.set_cookie(
+        ACCOUNT_COOKIE, sign_account_id(ticket.account_id), httponly=True,
+        secure=True, samesite="lax", max_age=30 * 86400, path="/",
+    )
+    return response
 
 
 @router.post("/api/auth/max/start")
@@ -148,7 +183,11 @@ async def max_login_status(token: str, db: AsyncSession = Depends(get_db)):
 async def web_events(request: Request, db: AsyncSession = Depends(get_db)):
     platform, external_id, _ = await browser_identity(request, db)
     entries = await list_linked_events(db, platform, external_id)
-    return [calendar_payload(entry) for entry in entries]
+    try:
+        schedule = await list_schedule_occurrences(db, platform, external_id)
+    except StopAsyncIteration:
+        schedule = []
+    return [calendar_payload(entry) for entry in entries] + schedule
 
 
 @router.post("/api/calendar/events", status_code=status.HTTP_201_CREATED)
@@ -157,7 +196,7 @@ async def web_create(payload: CalendarEventInput, request: Request, db: AsyncSes
     try:
         entry = await create_linked_event(
             db, platform, external_id, payload.title, payload.description or "",
-            payload.start_at, payload.end_at, payload.reminders,
+            payload.start_at, payload.end_at, payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except ValueError as error:
@@ -170,7 +209,7 @@ async def web_update(event_ref: str, payload: CalendarEventUpdate, request: Requ
     try:
         entry = await update_linked_event(
             db, platform, external_id, event_ref, payload.start_at, payload.end_at,
-            payload.title, payload.description, payload.reminders,
+            payload.title, payload.description, payload.reminders, payload.all_day,
         )
         return calendar_payload(entry)
     except LookupError as error:
