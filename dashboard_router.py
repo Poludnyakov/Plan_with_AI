@@ -322,7 +322,12 @@ async def get_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         # 2. Получаем подтвержденные дедлайны
         events_result = await db.execute(
             select(Event)
-            .filter(Event.user_id == user.id, Event.status == EventStatus.CONFIRMED)
+            .filter(
+                Event.user_id == user.id,
+                Event.status == EventStatus.CONFIRMED,
+                Event.is_completed.is_(False),
+                Event.deadline > datetime.now(timezone.utc),
+            )
             .order_by(Event.deadline.asc())
         )
         events = events_result.scalars().all()

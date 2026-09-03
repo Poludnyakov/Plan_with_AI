@@ -316,6 +316,18 @@ button { -webkit-tap-highlight-color:transparent; }
   const eventStart = event => new Date(event.start);
   const eventEnd = event => new Date(event.end);
   const eventAllDay = event => Boolean(event.all_day);
+  const eventIsPast = (event, now = new Date()) => eventEnd(event) <= now;
+  function allDayOverlapMessage(overlaps) {
+    const titles = (overlaps || []).slice(0, 3).map(event => `«${event.title}»`);
+    if (!titles.length) return "";
+    const suffix = overlaps.length > titles.length ? ` и ещё ${overlaps.length - titles.length}` : "";
+    return `⚠️ У вас есть пересечение с мероприятием на весь день или дольше: ${titles.join(", ")}${suffix}.`;
+  }
+  const eventAllDayOrLong = event => eventAllDay(event) || eventEnd(event) - eventStart(event) >= 24 * 60 * 60 * 1000;
+  function currentAllDayOverlaps(start, end, excludeId = null) {
+    return state.events.filter(event => eventAllDayOrLong(event) && eventId(event) !== String(excludeId || "")
+      && eventStart(event) < end && eventEnd(event) > start);
+  }
   function eventOccursOnDay(event, date) {
     if (!eventAllDay(event)) return sameDay(eventStart(event), date);
     const day = dayStart(date);
@@ -416,7 +428,10 @@ button { -webkit-tap-highlight-color:transparent; }
     },120);
   });
   function eventsForSelectedDay() {
-    return state.events.filter(event=>eventOccursOnDay(event,state.date)).sort((a,b)=>eventStart(a)-eventStart(b));
+    const today=dayStart(new Date());
+    return state.events
+      .filter(event=>eventOccursOnDay(event,state.date) && (state.date<today || !eventIsPast(event)))
+      .sort((a,b)=>eventStart(a)-eventStart(b));
   }
   function layoutEvents(events) {
     let group=[], groupEnd=null;
@@ -521,7 +536,7 @@ button { -webkit-tap-highlight-color:transparent; }
         try {
           const shift=start-originalStart;
           const reminders=(event.reminders||[]).map(value=>new Date(new Date(value).getTime()+shift).toISOString());
-          await api(`${CONFIG.apiBase}/${encodeURIComponent(event.id)}`,{
+          const saved = await api(`${CONFIG.apiBase}/${encodeURIComponent(event.id)}`,{
             method:'PATCH',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({start_at:start.toISOString(),end_at:end.toISOString(),reminders})
           });
@@ -596,21 +611,27 @@ button { -webkit-tap-highlight-color:transparent; }
     return button;
   }
   function renderAgenda() {
-    const root=byId('agendaScroll'); root.replaceChildren(); let previous=''; const rows=[];
+    const root=byId("agendaScroll"); root.replaceChildren(); let previous="";
+    const now=new Date(), today=dayStart(now), rows=[];
     state.events.forEach(event=>{
-      if(!eventAllDay(event)) { rows.push({event,date:eventStart(event)}); return; }
-      for(let date=dayStart(eventStart(event)); date<eventEnd(event); date=addDays(date,1)) rows.push({event,date});
+      if(eventIsPast(event,now)) return;
+      if(!eventAllDay(event)) {
+        rows.push({event,date:eventStart(event)<today?today:eventStart(event)});
+        return;
+      }
+      const firstDate=eventStart(event)<today?today:dayStart(eventStart(event));
+      for(let date=firstDate;date<eventEnd(event);date=addDays(date,1)) rows.push({event,date});
     });
     rows.sort((a,b)=>a.date-b.date || eventStart(a.event)-eventStart(b.event)).forEach(({event,date})=>{
       const current=dayKey(date);
       if(current!==previous) {
-        const heading=document.createElement('h3'); heading.className='agenda-date';
+        const heading=document.createElement("h3"); heading.className="agenda-date";
         heading.textContent=capitalize(dayFormat.format(date)); root.append(heading); previous=current;
       }
       root.append(agendaNode(event));
     });
-    if(!state.events.length) {
-      const empty=document.createElement('p'); empty.className='empty-state'; empty.textContent='Расписание пока пустое'; root.append(empty);
+    if(!rows.length) {
+      const empty=document.createElement("p"); empty.className="empty-state"; empty.textContent="Расписание пока пустое"; root.append(empty);
     }
   }
   function updateView() {
@@ -700,12 +721,15 @@ button { -webkit-tap-highlight-color:transparent; }
       let start=new Date(byId('start-at').value), end=new Date(byId('end-at').value);
       const allDay=byId('all-day').checked;
       if(allDay) ({start,end}=allDayBounds(start,end));
+      const overlapWarning=allDayOverlapMessage(currentAllDayOverlaps(start,end));
+      if(overlapWarning && !confirm(`${overlapWarning}\n\nДобавить событие всё равно?`)) return;
       const reminders=collectReminderTimes('createReminders',start);
-      await api(CONFIG.apiBase,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      const saved = await api(CONFIG.apiBase,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
         title:byId('title').value.trim(),description:byId('description').value.trim(),
         start_at:start.toISOString(),end_at:end.toISOString(),reminders,all_day:allDay
       })});
-      state.date=dayStart(start); closeModal('createModal'); await loadEvents(); toast('Мероприятие добавлено');
+      state.date=dayStart(start); closeModal('createModal'); await loadEvents();
+      toast(allDayOverlapMessage(saved.all_day_overlaps) || 'Мероприятие добавлено');
     } catch(error) { showError('createError',error.message); } finally { save.disabled=false; }
   };
   byId('editForm').onsubmit=async submit=>{
@@ -715,14 +739,17 @@ button { -webkit-tap-highlight-color:transparent; }
       let start=new Date(byId('editStart').value), end=new Date(byId('editEnd').value);
       const allDay=byId('editAllDay').checked;
       if(allDay) ({start,end}=allDayBounds(start,end));
+      const overlapWarning=allDayOverlapMessage(currentAllDayOverlaps(start,end,state.activeEvent.id));
+      if(overlapWarning && !confirm(`${overlapWarning}\n\nСохранить изменения всё равно?`)) return;
       const reminders=collectReminderTimes('editReminders',start);
-      await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}`,{
+      const saved = await api(`${CONFIG.apiBase}/${encodeURIComponent(state.activeEvent.id)}`,{
         method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({
           title:byId('editTitle').value.trim(),description:byId('editDescription').value.trim(),
           start_at:start.toISOString(),end_at:end.toISOString(),reminders,all_day:allDay
         })
       });
-      state.date=dayStart(start); closeModal('editModal'); await loadEvents(); toast('Изменения сохранены');
+      state.date=dayStart(start); closeModal('editModal'); await loadEvents();
+      toast(allDayOverlapMessage(saved.all_day_overlaps) || 'Изменения сохранены');
     } catch(error) { showError('editError',error.message); } finally { save.disabled=false; }
   };
   byId('completeEvent').onclick=async()=>{

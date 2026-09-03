@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -217,14 +218,17 @@ async def test_daily_summary_is_sent_once_with_calendar_button(reminder_db):
     reminder_db.add(user)
     await reminder_db.flush()
     now = datetime.now(timezone.utc)
-    start = now + timedelta(hours=2)
+    local_now = now.astimezone(ZoneInfo("Europe/Moscow"))
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     event = Event(
-        user_id=user.id, title="Пара", deadline=start + timedelta(hours=1),
+        user_id=user.id, title="Пара", deadline=start + timedelta(days=1),
         status=EventStatus.CONFIRMED,
     )
     reminder_db.add(event)
     await reminder_db.flush()
-    reminder_db.add(EventTiming(event_id=event.id, start_at=start, end_at=event.deadline))
+    reminder_db.add(EventTiming(
+        event_id=event.id, start_at=start, end_at=event.deadline, all_day=True,
+    ))
     preference = await reminder_preference(reminder_db, "telegram", user.tg_id)
     preference.summary_hour = 0
     preference.notification_platform = "telegram"

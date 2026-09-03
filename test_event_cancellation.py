@@ -50,13 +50,13 @@ async def test_plain_cancel_returns_all_matching_user_events():
     )
 
     with patch(
-        "handlers.event_cancellation.extract_intervals", new_callable=AsyncMock
+        "handlers.event_cancellation.extract_intervals", new=AsyncMock(return_value=[])
     ) as extract:
         candidates = await find_cancellation_candidates(
             "кр по русскому", [first, second]
         )
 
-    extract.assert_not_awaited()
+    extract.assert_awaited_once()
     assert [item[1].id for item in candidates] == [1, 2]
 
 

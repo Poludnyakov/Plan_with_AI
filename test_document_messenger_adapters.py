@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from handlers.pipeline_handlers_intervals import processing_status
+from handlers.pipeline_handlers_intervals import handle_document_input, processing_status
 from max_bot.handler import MaxUpdateHandler
+from schedule_document_service import ScheduleDocumentClarification
 
 
 @pytest.mark.anyio
@@ -46,7 +47,7 @@ async def test_max_file_is_processed_with_prompt_and_visible_status():
             "week_pattern": "every", "confidence": 0.95,
         }],
     }
-    draft = SimpleNamespace(id=17)
+    draft = SimpleNamespace(id=17, status="ready")
 
     with patch("max_bot.handler.parse_schedule_document", new_callable=AsyncMock, return_value=extraction) as parse, \
          patch("max_bot.handler.pending_import_source", new_callable=AsyncMock, return_value=None), \
@@ -79,3 +80,73 @@ async def test_max_file_is_processed_with_prompt_and_visible_status():
         "выбери смены Анны с 1 сентября по 1 декабря",
         valid_range=(date(2026, 9, 1), date(2026, 12, 1)),
     )
+
+
+
+@pytest.mark.anyio
+async def test_telegram_keeps_file_when_parser_needs_a_real_choice():
+    async def download(_document, destination):
+        destination.write(b"spreadsheet")
+
+    status = SimpleNamespace(edit_text=AsyncMock())
+    message = SimpleNamespace(
+        document=SimpleNamespace(file_size=100, file_name="schedule.xlsx"),
+        caption="с 1 сентября по 1 декабря",
+        chat=SimpleNamespace(id=42),
+        from_user=SimpleNamespace(id=321),
+        bot=SimpleNamespace(send_chat_action=AsyncMock(), download=download),
+        answer=AsyncMock(return_value=status),
+    )
+    db = MagicMock(spec=AsyncSession)
+    clarification = ScheduleDocumentClarification("несколько расписаний: ПИ-241, ПИ-242")
+
+    with patch(
+        "handlers.pipeline_handlers_intervals.parse_schedule_document",
+        new_callable=AsyncMock,
+        side_effect=clarification,
+    ), patch(
+        "handlers.pipeline_handlers_intervals.save_import_source", new_callable=AsyncMock
+    ) as save:
+        await handle_document_input(message, db)
+
+    save.assert_awaited_once_with(
+        db, "telegram", 321, b"spreadsheet", "schedule.xlsx", "с 1 сентября по 1 декабря"
+    )
+    assert any("несколько расписаний" in call.args[0] for call in message.answer.await_args_list)
+
+
+@pytest.mark.anyio
+async def test_max_keeps_file_when_parser_needs_a_real_choice():
+    client = SimpleNamespace(
+        send_message=AsyncMock(),
+        download=AsyncMock(return_value=b"spreadsheet"),
+    )
+    anonymizer = SimpleNamespace(
+        anonymize_text=lambda value: value,
+        clean_event_title=lambda value: value,
+        clean_display_text=lambda value: value,
+    )
+    handler = MaxUpdateHandler(client, SimpleNamespace(anonymizer=anonymizer), SimpleNamespace(miniapp_name="planiruy"))
+    db = MagicMock(spec=AsyncSession)
+    clarification = ScheduleDocumentClarification("несколько расписаний: ПИ-241, ПИ-242")
+
+    with patch(
+        "max_bot.handler.parse_schedule_document", new_callable=AsyncMock, side_effect=clarification
+    ), patch("max_bot.handler.pending_import_source", new_callable=AsyncMock, return_value=None), patch(
+        "max_bot.handler.pending_draft", new_callable=AsyncMock, return_value=None
+    ), patch("max_bot.handler.save_import_source", new_callable=AsyncMock) as save:
+        await handler.handle_message({
+            "sender": {"user_id": 321},
+            "body": {
+                "text": "с 1 сентября по 1 декабря",
+                "attachments": [{
+                    "type": "file",
+                    "payload": {"url": "https://files.max.ru/schedule.xlsx", "name": "schedule.xlsx", "size": 100},
+                }],
+            },
+        }, db)
+
+    save.assert_awaited_once_with(
+        db, "max", 321, b"spreadsheet", "schedule.xlsx", "с 1 сентября по 1 декабря"
+    )
+    assert any("несколько расписаний" in call.args[0] for call in client.send_message.await_args_list)

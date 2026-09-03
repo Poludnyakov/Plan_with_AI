@@ -33,6 +33,21 @@ def aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+def entry_is_past(entry: CalendarEntry, now: datetime | None = None) -> bool:
+    """Return true when an event belongs only to calendar history."""
+    current = aware(now or datetime.now(timezone.utc))
+    return aware(entry.timing.end_at) <= current
+
+
+def entry_is_upcoming(entry: CalendarEntry, now: datetime | None = None) -> bool:
+    """Return true only for uncompleted events that have not started yet."""
+    current = aware(now or datetime.now(timezone.utc))
+    return (
+        not bool(getattr(entry.event, "is_completed", False))
+        and aware(entry.timing.start_at) > current
+    )
+
+
 def parse_ref(value: str | int, default_source: str) -> tuple[str, int]:
     text = str(value)
     if ":" not in text:
@@ -183,6 +198,36 @@ async def find_linked_conflict(
         if aware(entry.timing.start_at) < end and aware(entry.timing.end_at) > start:
             return entry
     return None
+
+
+async def find_linked_all_day_overlaps(
+    db: AsyncSession,
+    platform: str,
+    external_id: int,
+    start_at: datetime,
+    end_at: datetime,
+    exclude_ref: str | None = None,
+) -> list[CalendarEntry]:
+    """Return existing all-day events intersecting a candidate interval.
+
+    All-day and long-running events are allowed to coexist with timed events,
+    so this is a non-blocking warning rather than a calendar conflict.
+    """
+    start, end = aware(start_at), aware(end_at)
+    overlaps: list[CalendarEntry] = []
+    for entry in await list_linked_events(db, platform, external_id):
+        if exclude_ref and entry.ref == exclude_ref:
+            continue
+        timing = entry.timing
+        is_all_day_or_long = (
+            bool(getattr(timing, "all_day", False))
+            or aware(timing.end_at) - aware(timing.start_at) >= timedelta(days=1)
+        )
+        if not is_all_day_or_long:
+            continue
+        if aware(timing.start_at) < end and aware(timing.end_at) > start:
+            overlaps.append(entry)
+    return overlaps
 
 
 async def ensure_platform_user(db: AsyncSession, platform: str, external_id: int):

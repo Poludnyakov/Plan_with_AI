@@ -10,9 +10,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import Base
 from schedule_document_service import (
     DocumentChunkExtraction,
+    ParsedDocumentChunk,
+    ScheduleDocumentClarification,
     _deterministic_scoped_slots,
     _ocr_text_from_payload,
     _scoped_table_weekdays,
+    _table_selection_candidates,
     _verify_source_support,
     _verify_weekday_coverage,
     _clean_json,
@@ -121,10 +124,9 @@ async def test_document_parser_processes_all_chunks_and_keeps_exact_and_recurrin
 
     assert parse.await_count == 2
     assert all(call.args[2] == "strong/latest" for call in parse.await_args_list)
-    assert normalize.await_count == 1
-    assert normalize.await_args.args[2] == "lite/latest"
+    normalize.assert_not_awaited()
     assert result["chunks_processed"] == 2
-    assert result["pipeline"] == "strong_reader_then_lite_normalizer"
+    assert result["pipeline"] == "strong_reader_checked"
     assert {slot["title"] for slot in result["slots"]} == {"Смена", "Тренировка"}
 
 
@@ -149,7 +151,7 @@ async def test_image_uses_strong_multimodal_reader_before_ocr():
 
     image_reader.assert_awaited_once()
     assert image_reader.await_args.args[3] == "strong/latest"
-    extract_text.assert_awaited_once()
+    extract_text.assert_not_awaited()
     assert result["slots"][0]["title"] == "Тренировка"
 
 
@@ -162,13 +164,31 @@ async def test_empty_strong_reader_is_not_reinterpreted_by_lite_model():
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="Вторник Дежурство 08:00 12:00"), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=[]) as parse, \
          patch("schedule_document_service._normalize_candidates", new_callable=AsyncMock, side_effect=lambda values, *_: values):
-        with pytest.raises(ValueError, match="не нашла подходящих строк"):
+        with pytest.raises(ValueError, match="подтверждаемые строки"):
             await parse_schedule_document(
                 b"table", "schedule.csv", "дежурства с 1 сентября по 1 декабря"
             )
 
     assert parse.await_count == 1
     assert parse.await_args.args[2] == "strong/latest"
+
+
+@pytest.mark.anyio
+async def test_parser_without_prompt_accepts_exact_dates():
+    rows = [{
+        "title": "Математика", "weekday": 4, "occurrence_date": "2026-09-04",
+        "start_time": "09:00", "end_time": "10:30", "description": "",
+        "week_pattern": "every", "confidence": 0.96,
+    }]
+    with patch("schedule_document_service.settings.API_KEY", "key"), \
+         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+         patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="04.09.2026 Математика 09:00 10:30"), \
+         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=rows) as parse:
+        result = await parse_schedule_document(b"table", "schedule.csv", "")
+
+    parse.assert_awaited_once()
+    assert result["requires_range"] is False
+    assert result["slots"][0]["occurrence_date"] == "2026-09-04"
 
 
 def test_verifier_rejects_hallucinated_subject_but_keeps_source_title():
@@ -228,7 +248,7 @@ def test_multigroup_xls_coverage_uses_only_requested_group_column():
 
 
 @pytest.mark.anyio
-async def test_unambiguous_group_projection_does_not_spend_llm_calls():
+async def test_unambiguous_group_projection_uses_strong_reader():
     source = "\n".join([
         "R1\tДень\tВремя\tПИ-241\tПИ-242",
         "R2\tПонедельник\t09:00-10:30\tМатематика\tБиология",
@@ -236,23 +256,25 @@ async def test_unambiguous_group_projection_does_not_spend_llm_calls():
         "R4\tСреда\t11:00-12:30\tИстория\tЛитература",
         "R5\tЧетверг\t12:00-13:30\t—\tФилософия",
     ])
+    rows = [
+        {"title": "Математика", "weekday": 0, "start_time": "09:00", "end_time": "10:30"},
+        {"title": "Физика", "weekday": 1, "start_time": "10:00", "end_time": "11:30"},
+        {"title": "История", "weekday": 2, "start_time": "11:00", "end_time": "12:30"},
+    ]
     with patch("schedule_document_service.settings.API_KEY", "key"), \
          patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
-         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock) as parse, \
-         patch("schedule_document_service._normalize_candidates", new_callable=AsyncMock) as normalize:
+         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=rows) as parse:
         result = await parse_schedule_document(
             b"xls", "schedule.xls",
             "группа ПИ-241 с 1 сентября по 1 декабря",
         )
 
-    parse.assert_not_awaited()
-    normalize.assert_not_awaited()
-    assert result["pipeline"] == "deterministic_group_projection"
+    parse.assert_awaited_once()
+    assert result["pipeline"] == "strong_reader_checked"
     assert [item["title"] for item in result["slots"]] == [
         "Математика", "Физика", "История"
     ]
-
 
 def test_multigroup_xls_rejects_missing_day_inside_requested_group():
     source = "\n".join([
@@ -302,9 +324,77 @@ async def test_exact_date_row_is_imported_only_on_that_date():
                 "week_pattern": "every", "confidence": 0.96,
             }],
         })
-        await set_draft_range(db, draft, date(2026, 9, 1), date(2026, 12, 1))
+        assert draft.status == "ready"
+        assert draft.valid_from == draft.valid_until == date(2026, 9, 3)
         assert await confirm_import(db, "telegram", 9001, draft.id) == ("created", 1)
         rows = (await db.execute(select(ScheduleSeries))).scalars().all()
         assert len(rows) == 1
         assert rows[0].valid_from == rows[0].valid_until == date(2026, 9, 3)
     await engine.dispose()
+
+
+
+def test_header_candidates_do_not_treat_subject_codes_as_groups():
+    source = "\n".join([
+        "R1\tДень\tВремя\tПредмет",
+        "R2\tПонедельник\t09:00-10:30\tБД-101",
+        "R3\tВторник\t10:40-12:10\tОП-202",
+    ])
+
+    assert _table_selection_candidates(source) == []
+
+
+@pytest.mark.anyio
+async def test_multigroup_source_asks_after_strong_reader_detects_ambiguity():
+    source = "\n".join([
+        "=== ЛИСТ: Расписание ===",
+        "R1\tДень\tВремя\tПИ-241\tПИ-242",
+        "R2\tПонедельник\t09:00-10:30\tМатематика\tБиология",
+        "R3\tВторник\t10:40-12:10\tФизика\tХимия",
+    ])
+    result = ParsedDocumentChunk(
+        slots=[],
+        clarification="Нужно выбрать одну группу: ПИ-241 или ПИ-242.",
+        choices=["ПИ-241", "ПИ-242"],
+    )
+    with patch("schedule_document_service.settings.API_KEY", "key"), \
+         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+         patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
+         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=result) as parse:
+        with pytest.raises(ScheduleDocumentClarification, match="выбрать одну группу") as error:
+            await parse_schedule_document(b"xls", "schedule.xls", "")
+
+    parse.assert_awaited_once()
+    assert error.value.choices == ["ПИ-241", "ПИ-242"]
+
+
+@pytest.mark.anyio
+async def test_reader_budget_stops_unknown_large_source_before_partial_import():
+    source = "Понедельник Раздел 09:00 10:00"
+    with patch("schedule_document_service.settings.API_KEY", "key"), \
+         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+         patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
+         patch("schedule_document_service.document_chunks", return_value=["part"] * 5), \
+         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock) as parse:
+        with pytest.raises(ScheduleDocumentClarification, match="слишком много"):
+            await parse_schedule_document(
+                b"large", "schedule.txt", "с 1 сентября по 1 декабря"
+            )
+
+    parse.assert_not_awaited()
+
+
+
+@pytest.mark.anyio
+async def test_magic_detects_xlsx_when_messenger_drops_filename_extension():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["День", "Время", "Предмет"])
+    sheet.append(["Понедельник", "09:00-10:30", "Математика"])
+    stream = io.BytesIO()
+    workbook.save(stream)
+
+    text = await extract_document_text(stream.getvalue(), "document")
+
+    assert "Понедельник" in text
+    assert "Математика" in text

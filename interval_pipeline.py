@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anonymizer import DataAnonymizer
+from conversation_service import recent_dialogue_context, remember_dialogue_turn
 from reminder_service import build_user_reminders
 from interval_ai_service import extract_intervals
 from interval_models import EventTiming
@@ -94,12 +95,31 @@ class IntervalActionPipelineService:
         if not raw_text.strip():
             raise ValueError("Сообщение пустое.")
         try:
-            anonymized = self.anonymizer.anonymize_text(raw_text)
-            extracted = await extract_intervals(anonymized)
-            return await self._persist(user_tg_id, extracted, db_session)
+            extracted = await self.extract_text_input(
+                user_tg_id, raw_text, db_session
+            )
+            events = await self._persist(user_tg_id, extracted, db_session)
+            await remember_dialogue_turn(
+                db_session, "telegram", user_tg_id,
+                self.anonymizer.anonymize_text(raw_text), commit=True,
+            )
+            return events
         except Exception:
             await db_session.rollback()
             raise
+
+    async def extract_text_input(
+        self,
+        user_tg_id: int,
+        raw_text: str,
+        db_session: AsyncSession,
+    ) -> List[dict]:
+        """Parse one text turn with the compact history of this account."""
+        history = await recent_dialogue_context(
+            db_session, "telegram", user_tg_id
+        )
+        anonymized = self.anonymizer.anonymize_text(raw_text)
+        return await extract_intervals(anonymized, context=history)
 
     async def process_voice_input(
         self,

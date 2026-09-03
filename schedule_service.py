@@ -182,12 +182,20 @@ async def create_import_draft(
     )).scalars().all()
     for item in old:
         item.status = "superseded"
+    slots = list(extraction["slots"])
+    exact_dates = [
+        date.fromisoformat(slot["occurrence_date"])
+        for slot in slots if slot.get("occurrence_date")
+    ]
+    all_rows_are_exact = bool(slots) and len(exact_dates) == len(slots)
     draft = ScheduleImportDraft(
         account_id=account_id,
         source_platform=platform,
-        slots=extraction["slots"],
+        slots=slots,
         confidence=float(extraction.get("confidence", 0.0)),
-        status="awaiting_range",
+        status="ready" if all_rows_are_exact else "awaiting_range",
+        valid_from=min(exact_dates) if all_rows_are_exact else None,
+        valid_until=max(exact_dates) if all_rows_are_exact else None,
     )
     db.add(draft)
     await db.commit()
@@ -206,7 +214,11 @@ async def set_draft_range(
 def import_preview(draft: ScheduleImportDraft, limit: int = 12) -> str:
     lines = [
         f"Распознано интервалов: {len(draft.slots)}",
-        f"Период: {draft.valid_from:%d.%m.%Y}–{draft.valid_until:%d.%m.%Y}",
+        (
+            f"Даты: {draft.valid_from:%d.%m.%Y}–{draft.valid_until:%d.%m.%Y}"
+            if draft.slots and all(slot.get("occurrence_date") for slot in draft.slots)
+            else f"Период: {draft.valid_from:%d.%m.%Y}–{draft.valid_until:%d.%m.%Y}"
+        ),
         "",
     ]
     for slot in draft.slots[:limit]:

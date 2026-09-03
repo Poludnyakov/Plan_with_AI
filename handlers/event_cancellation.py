@@ -12,10 +12,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from interval_ai_service import extract_intervals
+from conversation_service import recent_dialogue_context, remember_dialogue_turn
 from interval_calendar_sync import delete_yandex_interval
 from interval_models import EventTiming
 from models import Event, EventStatus, User
-from unified_calendar import delete_linked_event, get_owned_entry, list_linked_events
+from unified_calendar import (
+    delete_linked_event,
+    entry_is_upcoming,
+    get_owned_entry,
+    list_linked_events,
+)
 
 
 logger = logging.getLogger("EventCancellationHandlers")
@@ -98,28 +104,37 @@ def format_candidate(event: Event, timing: EventTiming | None, timezone_name: st
 
 
 async def load_user_events(db: AsyncSession, tg_id: int):
-    entries = await list_linked_events(db, "telegram", tg_id)
+    entries = [
+        entry for entry in await list_linked_events(db, "telegram", tg_id)
+        if entry_is_upcoming(entry)
+    ]
     for entry in entries:
         entry.event._calendar_ref = entry.ref
     return [(entry.event, entry.timing, entry.timezone_name) for entry in entries]
 
 
-async def find_cancellation_candidates(query: str, rows):
+async def find_cancellation_candidates(
+    query: str, rows, db: AsyncSession | None = None, tg_id: int | None = None
+):
     date_hint = bool(DATE_HINT_RE.search(query))
     time_hint = bool(TIME_HINT_RE.search(query))
     search_title = query
     target_start = None
-    if date_hint or time_hint:
-        try:
-            from handlers.pipeline_handlers_intervals import pipeline
+    try:
+        from handlers.pipeline_handlers_intervals import pipeline
 
-            safe_query = pipeline.anonymizer.anonymize_text(query)
-            extracted = await extract_intervals(safe_query)
-            if extracted:
-                search_title = extracted[0].get("title") or query
+        safe_query = pipeline.anonymizer.anonymize_text(query)
+        history = (
+            await recent_dialogue_context(db, "telegram", tg_id)
+            if db is not None and tg_id is not None else []
+        )
+        extracted = await extract_intervals(safe_query, context=history)
+        if isinstance(extracted, list) and extracted and isinstance(extracted[0], dict):
+            search_title = extracted[0].get("title") or query
+            if (date_hint or time_hint) and extracted[0].get("start_at"):
                 target_start = ensure_aware(extracted[0]["start_at"])
-        except Exception as error:
-            logger.warning("Could not parse cancellation details: %s", error, exc_info=True)
+    except Exception as error:
+        logger.warning("Could not parse cancellation details: %s", error, exc_info=True)
 
     scored = []
     for event, timing, timezone_name in rows:
@@ -176,7 +191,14 @@ async def handle_cancellation_message(message: Message, db_session: AsyncSession
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
         rows = await load_user_events(db_session, message.from_user.id)
-        candidates = await find_cancellation_candidates(query, rows)
+        candidates = await find_cancellation_candidates(
+            query, rows, db_session, message.from_user.id
+        )
+        from handlers.pipeline_handlers_intervals import pipeline
+        await remember_dialogue_turn(
+            db_session, "telegram", message.from_user.id,
+            pipeline.anonymizer.anonymize_text(message.text or ""), commit=True,
+        )
         if not candidates:
             await message.answer(
                 "Не нашёл подходящее мероприятие. Уточните название, дату или время."
@@ -219,6 +241,9 @@ async def handle_delete_event_callback(callback: CallbackQuery, db_session: Asyn
         )
         if not entry:
             await callback.answer("Событие уже удалено или не найдено.", show_alert=True)
+            return
+        if not entry_is_upcoming(entry):
+            await callback.answer("Прошедшее событие доступно только в истории календаря.", show_alert=True)
             return
         event, timing, timezone_name = entry.event, entry.timing, entry.timezone_name
         description = format_candidate(event, timing, timezone_name)

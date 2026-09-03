@@ -26,6 +26,7 @@ from account_service import ensure_identity
 from schedule_service import list_schedule_occurrences
 from unified_calendar import (
     create_linked_event,
+    find_linked_all_day_overlaps,
     delete_linked_event,
     list_linked_events,
     payload as calendar_payload,
@@ -256,7 +257,13 @@ async def create_interval_event(
             payload.description or "", payload.start_at, payload.end_at,
             payload.reminders, payload.all_day,
         )
-        return calendar_payload(entry)
+        overlaps = await find_linked_all_day_overlaps(
+            db, "telegram", user_tg_id, entry.timing.start_at, entry.timing.end_at,
+            exclude_ref=entry.ref,
+        )
+        result = calendar_payload(entry)
+        result["all_day_overlaps"] = [calendar_payload(item) for item in overlaps]
+        return result
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -274,7 +281,13 @@ async def update_interval_event(
             payload.start_at, payload.end_at, payload.title, payload.description,
             payload.reminders, payload.all_day,
         )
-        return calendar_payload(entry)
+        overlaps = await find_linked_all_day_overlaps(
+            db, "telegram", user_tg_id, entry.timing.start_at, entry.timing.end_at,
+            exclude_ref=entry.ref,
+        )
+        result = calendar_payload(entry)
+        result["all_day_overlaps"] = [calendar_payload(item) for item in overlaps]
+        return result
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:

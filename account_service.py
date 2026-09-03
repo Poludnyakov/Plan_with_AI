@@ -13,6 +13,7 @@ from account_models import (
 )
 from schedule_models import ScheduleImportDraft, ScheduleSeries
 from reminder_models import ReminderDeliveryState, ReminderPreference
+from conversation_models import ConversationTurn
 
 
 PLATFORMS = {"telegram", "max"}
@@ -137,6 +138,11 @@ async def consume_link_code(
         await db.execute(
             update(ScheduleImportDraft)
             .where(ScheduleImportDraft.account_id == old_account_id)
+            .values(account_id=source.account_id)
+        )
+        await db.execute(
+            update(ConversationTurn)
+            .where(ConversationTurn.account_id == old_account_id)
             .values(account_id=source.account_id)
         )
         await db.execute(

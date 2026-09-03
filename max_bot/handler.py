@@ -7,10 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .api import MaxApiClient, callback_button, open_app_button
 from .calendar import delete_max_yandex, sync_max_yandex
+from conversation_service import event_context_text, remember_dialogue_turn
+from chat_edit_service import apply_chat_edit, is_edit_request
 from .config import MaxSettings
 from .models import MaxEvent, MaxEventTiming, MaxUser
 from schedule_ai_service import extract_weekly_schedule
-from schedule_document_service import MAX_FILE_BYTES, parse_schedule_document
+from schedule_document_service import (
+    MAX_FILE_BYTES,
+    ScheduleDocumentClarification,
+    parse_schedule_document,
+)
 from schedule_service import (
     cancel_import,
     confirm_import,
@@ -28,7 +34,13 @@ from schedule_service import (
     update_import_source_prompt,
 )
 from reminder_service import acknowledge_delivery
-from unified_calendar import delete_linked_event, find_linked_conflict, get_owned_entry
+from unified_calendar import (
+    delete_linked_event,
+    entry_is_upcoming,
+    find_linked_all_day_overlaps,
+    find_linked_conflict,
+    get_owned_entry,
+)
 from .service import CANCEL_RE, MaxEventService, format_interval
 
 
@@ -55,8 +67,26 @@ class MaxUpdateHandler:
             buttons=[[self.app_button()]],
         )
 
-    async def send_event_card(self, user_id: int, event: MaxEvent, source: str = "") -> None:
+    async def send_event_card(self, user_id: int, event: MaxEvent, db: AsyncSession, source: str = "") -> None:
         timing = event.timing
+        try:
+            all_day_overlaps = await find_linked_all_day_overlaps(
+                db, "max", user_id, timing.start_at, timing.end_at,
+                exclude_ref=f"m:{event.id}",
+            )
+        except StopAsyncIteration:
+            all_day_overlaps = []
+        overlap_text = ""
+        if all_day_overlaps:
+            overlap_rows = "\n".join(
+                f"• {item.event.title} — {format_interval(item.timing.start_at, item.timing.end_at, item.timezone_name, all_day=True)}"
+                for item in all_day_overlaps[:3]
+            )
+            suffix = "\n• …" if len(all_day_overlaps) > 3 else ""
+            overlap_text = (
+                "\n⚠️ У вас есть пересечение с мероприятием на весь день или дольше:\n"
+                f"{overlap_rows}{suffix}\nНовое событие всё равно можно добавить.\n"
+            )
         reminders = "\n".join(
             f"• {item.remind_at.astimezone():%d.%m в %H:%M}" for item in sorted(event.reminders, key=lambda x: x.remind_at)
         ) or "• Нет будущих напоминаний"
@@ -64,12 +94,86 @@ class MaxUpdateHandler:
             (source + "\n" if source else "") + f"**{event.title}**\n"
             f"🕒 {format_interval(timing.start_at, timing.end_at, all_day=bool(getattr(timing, "all_day", False)))}\n"
             + (f"📍 {event.description}\n" if event.description else "")
+            + overlap_text
             + f"\n**Напоминания:**\n{reminders}\n\nДобавить мероприятие в календарь?"
         )
         await self.client.send_message(text, user_id=user_id, buttons=[[
             callback_button("✅ Подтвердить", f"confirm:{event.id}"),
             callback_button("❌ Отменить", f"cancel:{event.id}"),
         ]])
+        await remember_dialogue_turn(
+            db, "max", user_id,
+            event_context_text(
+                event.title, timing.start_at, timing.end_at,
+                all_day=bool(getattr(timing, "all_day", False)),
+            ),
+            role="assistant", event_ref=f"m:{event.id}", commit=True,
+        )
+
+    async def handle_chat_edit(self, user_id: int, raw_text: str, db: AsyncSession) -> bool:
+        if not is_edit_request(raw_text):
+            return False
+        extracted = await self.service.extract_text_input(db, user_id, raw_text)
+        result = await apply_chat_edit(db, "max", user_id, raw_text, extracted)
+        await remember_dialogue_turn(
+            db, "max", user_id, self.service.anonymizer.anonymize_text(raw_text),
+            commit=True,
+        )
+        if result.status == "updated" and result.entry:
+            entry = result.entry
+            overlaps = await find_linked_all_day_overlaps(
+                db, "max", user_id, entry.timing.start_at, entry.timing.end_at,
+                exclude_ref=entry.ref,
+            )
+            warning = ""
+            if overlaps:
+                warning = "\n\n⚠️ Есть пересечение с событием на весь день или дольше: " + ", ".join(
+                    f"«{item.event.title}»" for item in overlaps[:3]
+                ) + "."
+            await remember_dialogue_turn(
+                db, "max", user_id,
+                event_context_text(
+                    entry.event.title, entry.timing.start_at, entry.timing.end_at,
+                    all_day=bool(getattr(entry.timing, "all_day", False)),
+                ),
+                role="assistant", event_ref=entry.ref, commit=True,
+            )
+            await self.client.send_message(
+                f"✅ Изменено: «{entry.event.title}» — "
+                f"{format_interval(entry.timing.start_at, entry.timing.end_at, entry.timezone_name, all_day=bool(getattr(entry.timing, "all_day", False)))}.{warning}",
+                user_id=user_id, buttons=[[self.app_button()]],
+            )
+            return True
+        if result.status == "ambiguous":
+            variants = "\n".join(
+                f"• {item.event.title} — {format_interval(item.timing.start_at, item.timing.end_at, item.timezone_name, all_day=bool(getattr(item.timing, "all_day", False)))}"
+                for item in result.candidates
+            )
+            await self.client.send_message(
+                "Нашёл несколько событий. Уточните название, исходную дату или время:\n" + variants,
+                user_id=user_id,
+            )
+            return True
+        if result.status == "draft":
+            await self.client.send_message(
+                "Это событие ещё ожидает подтверждения. Отмените карточку и отправьте уточнённый вариант.",
+                user_id=user_id,
+            )
+            return True
+        if result.status == "past":
+            await self.client.send_message(
+                "Это мероприятие уже прошло и осталось только в истории календаря. Для изменения укажите будущее мероприятие.",
+                user_id=user_id,
+            )
+            return True
+        if result.status == "missing":
+            await self.client.send_message(
+                "Не нашёл, какое событие изменить. Назовите его, например: «перенеси контрольную завтра в 10».",
+                user_id=user_id,
+            )
+            return True
+        await self.client.send_message("Не удалось понять, что изменить. Укажите новое время или дату.", user_id=user_id)
+        return True
 
     async def handle_update(self, update: dict, db: AsyncSession) -> None:
         kind = update.get("update_type")
@@ -156,7 +260,7 @@ class MaxUpdateHandler:
         content: bytes,
         filename: str,
         prompt: str,
-        date_range,
+        date_range=None,
     ):
         extraction = await parse_schedule_document(
             content, filename, prompt, valid_range=date_range
@@ -169,8 +273,26 @@ class MaxUpdateHandler:
                 self.service.anonymizer.anonymize_text(slot.get("description", ""))
             )
         draft = await create_import_draft(db, "max", user_id, extraction)
-        await set_draft_range(db, draft, *date_range)
+        if date_range and getattr(draft, "status", "awaiting_range") == "awaiting_range":
+            await set_draft_range(db, draft, *date_range)
         return draft, extraction
+
+    async def send_schedule_preview(self, user_id: int, draft, extraction: dict) -> None:
+        if getattr(draft, "status", "awaiting_range") == "awaiting_range":
+            await self.client.send_message(
+                "В файле нет точных дат для повторяющегося расписания. "
+                "Укажите период двумя датами, например: «с 1 сентября по 1 декабря».",
+                user_id=user_id,
+            )
+            return
+        await self.client.send_message(
+            self.verified_preview(draft, extraction),
+            user_id=user_id,
+            buttons=[
+                [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
+                [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+            ],
+        )
 
     async def handle_message(self, message: dict, db: AsyncSession) -> None:
         user_id = self.sender_id(message)
@@ -239,14 +361,6 @@ class MaxUpdateHandler:
                     f"❌ Некорректный период: {error}", user_id=user_id
                 )
                 return
-            if date_range is None:
-                await update_import_source_prompt(db, source, combined_prompt)
-                await self.client.send_message(
-                    "Файл сохранён. Теперь укажите период двумя датами, например: "
-                    "«с 1 сентября по 1 декабря». Можно также уточнить группу или человека.",
-                    user_id=user_id,
-                )
-                return
             await self.processing_status(user_id, "Ваш файл")
             try:
                 draft, extraction = await self.create_verified_schedule_draft(
@@ -254,14 +368,10 @@ class MaxUpdateHandler:
                     combined_prompt, date_range,
                 )
                 await finish_import_source(db, source)
-                await self.client.send_message(
-                    self.verified_preview(draft, extraction),
-                    user_id=user_id,
-                    buttons=[
-                        [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
-                        [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
-                    ],
-                )
+                await self.send_schedule_preview(user_id, draft, extraction)
+            except ScheduleDocumentClarification as clarification:
+                await update_import_source_prompt(db, source, combined_prompt)
+                await self.client.send_message(f"🔎 {clarification}", user_id=user_id)
             except Exception as error:
                 await db.rollback()
                 logger.error(
@@ -312,25 +422,10 @@ class MaxUpdateHandler:
                 content = await self.client.download(url)
                 date_range = parse_date_range(text) if text else None
                 filename = self.attachment_name(document)
-                if date_range is None:
-                    await save_import_source(
-                        db, "max", user_id, content, filename, text
-                    )
-                    await self.client.send_message(
-                        "Файл сохранён — повторно отправлять его не нужно. Напишите, что выбрать, "
-                        "и период двумя датами. Например: «группа ПИ-241 с 1 сентября по 1 декабря».",
-                        user_id=user_id,
-                    )
-                    return
                 draft, extraction = await self.create_verified_schedule_draft(
                     db, user_id, content, filename, text, date_range
                 )
-                await self.client.send_message(
-                    self.verified_preview(draft, extraction), user_id=user_id, buttons=[
-                        [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
-                        [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
-                    ],
-                )
+                await self.send_schedule_preview(user_id, draft, extraction)
                 return
 
             image = next((x for x in attachments if x.get("type") == "image"), None)
@@ -342,44 +437,25 @@ class MaxUpdateHandler:
                     raise ValueError("MAX не передал ссылку на изображение.")
                 image_content = await self.client.download(image_url)
                 date_range = parse_date_range(text) if text else None
-                if text and date_range:
+                if text:
                     draft, extraction = await self.create_verified_schedule_draft(
                         db, user_id, image_content, self.attachment_name(image),
                         text, date_range,
                     )
-                    await self.client.send_message(
-                        self.verified_preview(draft, extraction), user_id=user_id, buttons=[
-                            [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
-                            [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
-                        ],
-                    )
-                    return
-                if text:
-                    await save_import_source(
-                        db, "max", user_id, image_content,
-                        self.attachment_name(image), text,
-                    )
-                    await self.client.send_message(
-                        "Изображение сохранено. Напишите период двумя датами, например: "
-                        "«с 1 сентября по 1 декабря». Повторно отправлять его не нужно.",
-                        user_id=user_id,
-                    )
+                    await self.send_schedule_preview(user_id, draft, extraction)
                     return
                 weekly = await extract_weekly_schedule(image_content)
                 if weekly:
-                    await save_import_source(
-                        db, "max", user_id, image_content,
-                        self.attachment_name(image),
+                    draft, extraction = await self.create_verified_schedule_draft(
+                        db, user_id, image_content, self.attachment_name(image),
+                        "", None,
                     )
-                    await self.client.send_message(
-                        "Похоже, это расписание. Напишите одним сообщением, что выбрать, и период.\n\n"
-                        "Например: «группа ПИ-241 с 1 сентября по 1 декабря». "
-                        "Результат старого распознавателя не используется.",
-                        user_id=user_id,
-                    )
+                    await self.send_schedule_preview(user_id, draft, extraction)
                     return
             if text and not text.startswith("/") and not attachments:
                 await self.processing_status(user_id)
+                if await self.handle_chat_edit(user_id, text, db):
+                    return
                 events = await self.service.from_text(db, user_id, text)
                 source = ""
             else:
@@ -400,12 +476,23 @@ class MaxUpdateHandler:
                     )
                     source = "🖼 Распознано из изображения"
                 else:
-                    events = await self.service.from_voice(db, user_id, content)
+                    transcript = await self.service.speechkit.transcribe_voice(content)
+                    if await self.handle_chat_edit(user_id, transcript, db):
+                        return
+                    events = await self.service.from_text(db, user_id, transcript)
                     source = "🎙 Распознано из голосового сообщения"
             if not events:
                 await self.client.send_message("Не удалось найти мероприятие. Укажите дату и время точнее.", user_id=user_id)
             for event in events:
-                await self.send_event_card(user_id, event, source)
+                await self.send_event_card(user_id, event, db, source)
+        except ScheduleDocumentClarification as clarification:
+            if document:
+                await save_import_source(db, "max", user_id, content, filename, text)
+            elif image and image_content is not None:
+                await save_import_source(
+                    db, "max", user_id, image_content, self.attachment_name(image), text
+                )
+            await self.client.send_message(f"🔎 {clarification}", user_id=user_id)
         except Exception as error:
             await db.rollback()
             logger.error("MAX input processing failed: %s", error, exc_info=True)
@@ -416,6 +503,10 @@ class MaxUpdateHandler:
             await self.client.send_message("Напишите, что удалить. Например: «отмена контрольная по русскому».", user_id=user_id)
             return
         candidates = await self.service.cancellation_candidates(db, user_id, text)
+        await remember_dialogue_turn(
+            db, "max", user_id, self.service.anonymizer.anonymize_text(text),
+            commit=True,
+        )
         if not candidates:
             await self.client.send_message("Не нашёл подходящее мероприятие. Уточните название, дату или время.", user_id=user_id)
             return
@@ -500,6 +591,9 @@ class MaxUpdateHandler:
                 entry = await get_owned_entry(db, "max", user_id, event_text)
                 if not entry:
                     await self.client.answer_callback(callback_id, notification="Событие уже удалено")
+                    return
+                if not entry_is_upcoming(entry):
+                    await self.client.answer_callback(callback_id, notification="Прошедшее событие доступно только в истории календаря")
                     return
                 await delete_linked_event(db, "max", user_id, event_text)
                 await self.client.answer_callback(

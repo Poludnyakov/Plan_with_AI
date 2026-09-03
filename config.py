@@ -41,6 +41,12 @@ class Settings:
         self.YANDEX_DOCUMENT_OCR_MODEL = (
             os.getenv("YANDEX_DOCUMENT_OCR_MODEL") or "table"
         )
+        try:
+            self.YANDEX_DOCUMENT_MAX_READER_FRAGMENTS = max(
+                1, int(os.getenv("YANDEX_DOCUMENT_MAX_READER_FRAGMENTS") or "4")
+            )
+        except ValueError:
+            self.YANDEX_DOCUMENT_MAX_READER_FRAGMENTS = 4
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
         self.APP_URL = os.getenv("APP_URL") or "http://localhost:8000"
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")

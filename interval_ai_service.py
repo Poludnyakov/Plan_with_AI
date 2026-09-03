@@ -36,6 +36,7 @@ INTERVAL_SYSTEM_PROMPT = """
 7. end_at обязан быть строго позже start_at.
 8. Относительные даты вычисляй от переданных текущих даты и времени.
 9. Пользователь находится в часовом поясе Europe/Moscow (+03:00).
+10. Если последнее сообщение просит перенести или изменить ранее упомянутое событие, используй историю только для разрешения «его», «её», «это» и верни желаемую итоговую версию этого события. Не извлекай отдельные события из истории.
 
 Формат:
 {"events":[{"title":"Контрольная","start_at":"2026-08-20T15:00:00+03:00","end_at":"2026-08-20T17:00:00+03:00","description":"","all_day":false}]}
@@ -138,7 +139,10 @@ def mark_default_all_day(events: List[IntervalExtraction], source: Union[str, by
         event.end_at = event.start_at.replace(year=end_date.year, month=end_date.month, day=end_date.day)
 
 
-async def extract_intervals(text_or_image: Union[str, bytes]) -> List[dict]:
+async def extract_intervals(
+    text_or_image: Union[str, bytes],
+    context: list[str] | None = None,
+) -> List[dict]:
     if not settings.API_KEY:
         raise ValueError("Yandex API_KEY is not configured.")
     if not settings.FOLDER_ID:
@@ -149,6 +153,16 @@ async def extract_intervals(text_or_image: Union[str, bytes]) -> List[dict]:
         f"Сейчас {now.isoformat()}, день недели {now.strftime('%A')}.\n"
         + INTERVAL_SYSTEM_PROMPT
     )
+    if context and not isinstance(text_or_image, bytes):
+        history = "\n".join(
+            f"- {item[:1200]}" for item in context[-6:] if item.strip()
+        )
+        if history:
+            system_prompt += (
+                "\n\nКороткая история диалога (только для понимания ссылок на "
+                "предыдущие события; не создавай по ней новые события):\n"
+                + history
+            )
     is_image = isinstance(text_or_image, bytes)
     base_url = "https://ai.api.cloud.yandex.net/v1" if is_image else settings.YANDEX_BASE_URL
     client = AsyncOpenAI(

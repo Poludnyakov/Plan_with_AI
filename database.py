@@ -48,6 +48,7 @@ async def init_db() -> None:
         import max_bot.models  # noqa: F401
         import schedule_models  # noqa: F401
         import reminder_models  # noqa: F401
+        import conversation_models  # noqa: F401
         import statistics_models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
         # create_all() does not add columns to already deployed PostgreSQL tables.

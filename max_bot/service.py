@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from anonymizer import DataAnonymizer
+from conversation_service import recent_dialogue_context, remember_dialogue_turn
 from reminder_service import build_user_reminders
 from interval_ai_service import extract_intervals
 from .calendar import delete_max_yandex, sync_max_yandex
@@ -17,7 +18,7 @@ from interval_pipeline import REMINDER_OFFSETS, normalize_datetime
 from services import SpeechKitService
 
 from .models import MaxEvent, MaxEventTiming, MaxReminder, MaxUser
-from unified_calendar import list_linked_events
+from unified_calendar import entry_is_upcoming, list_linked_events
 
 
 logger = logging.getLogger("MaxEventService")
@@ -116,12 +117,24 @@ class MaxEventService:
         if not text.strip():
             raise ValueError("Сообщение пустое.")
         try:
-            return await self.create_drafts(
-                db, max_user_id, await extract_intervals(self.anonymizer.anonymize_text(text))
+            anonymized = self.anonymizer.anonymize_text(text)
+            items = await self.extract_text_input(db, max_user_id, text)
+            events = await self.create_drafts(db, max_user_id, items)
+            await remember_dialogue_turn(
+                db, "max", max_user_id, anonymized, commit=True,
             )
+            return events
         except Exception:
             await db.rollback()
             raise
+
+    async def extract_text_input(
+        self, db: AsyncSession, max_user_id: int, text: str
+    ) -> list[dict]:
+        history = await recent_dialogue_context(db, "max", max_user_id)
+        return await extract_intervals(
+            self.anonymizer.anonymize_text(text), context=history
+        )
 
     async def from_voice(self, db: AsyncSession, max_user_id: int, content: bytes) -> list[MaxEvent]:
         return await self.from_text(db, max_user_id, await self.speechkit.transcribe_voice(content))
@@ -196,7 +209,12 @@ class MaxEventService:
         result = await db.execute(
             select(MaxEvent, MaxEventTiming, MaxUser.timezone)
             .join(MaxUser).join(MaxEventTiming)
-            .filter(MaxUser.max_user_id == max_user_id, MaxEvent.status == "confirmed")
+            .filter(
+                MaxUser.max_user_id == max_user_id,
+                MaxEvent.status == "confirmed",
+                MaxEvent.is_completed.is_(False),
+                MaxEventTiming.start_at > datetime.now(timezone.utc),
+            )
             .order_by(MaxEventTiming.start_at).limit(limit)
         )
         return list(result.all())
@@ -208,15 +226,18 @@ class MaxEventService:
             return []
         title, target = query, None
         date_hint, time_hint = bool(DATE_RE.search(query)), bool(TIME_RE.search(query))
-        if date_hint or time_hint:
-            try:
-                items = await extract_intervals(self.anonymizer.anonymize_text(query))
-                if items:
-                    title, target = items[0].get("title") or query, aware(items[0]["start_at"])
-            except Exception as error:
-                logger.warning("MAX cancellation detail parsing failed: %s", error)
+        try:
+            items = await self.extract_text_input(db, max_user_id, query)
+            if items:
+                title = items[0].get("title") or query
+                if date_hint or time_hint:
+                    target = aware(items[0]["start_at"])
+        except Exception as error:
+            logger.warning("MAX cancellation detail parsing failed: %s", error)
         candidates = []
         for entry in await list_linked_events(db, "max", max_user_id):
+            if not entry_is_upcoming(entry):
+                continue
             event, timing, timezone_name = entry.event, entry.timing, entry.timezone_name
             event._calendar_ref = entry.ref
             score = title_similarity(title, event.title)

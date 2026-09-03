@@ -7,6 +7,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from chat_edit_service import apply_chat_edit, is_edit_request
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
@@ -14,11 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from interval_calendar_sync import sync_yandex_interval
+from conversation_service import event_context_text, remember_dialogue_turn
 from interval_models import EventTiming
 from interval_pipeline import IntervalActionPipelineService
 from models import Event, EventStatus, User
 from schedule_ai_service import extract_weekly_schedule
-from schedule_document_service import MAX_FILE_BYTES, parse_schedule_document
+from schedule_document_service import (
+    MAX_FILE_BYTES,
+    ScheduleDocumentClarification,
+    parse_schedule_document,
+)
 from schedule_service import (
     cancel_import,
     confirm_import,
@@ -35,7 +41,7 @@ from schedule_service import (
     skip_occurrence,
     update_import_source_prompt,
 )
-from unified_calendar import find_linked_conflict
+from unified_calendar import find_linked_all_day_overlaps, find_linked_conflict
 
 
 logger = logging.getLogger("IntervalPipelineHandlers")
@@ -96,7 +102,7 @@ async def create_verified_schedule_draft(
     content: bytes,
     filename: str,
     prompt: str,
-    date_range,
+    date_range=None,
 ):
     extraction = await parse_schedule_document(
         content, filename, prompt, valid_range=date_range
@@ -111,7 +117,8 @@ async def create_verified_schedule_draft(
     draft = await create_import_draft(
         db_session, "telegram", user_id, extraction
     )
-    await set_draft_range(db_session, draft, *date_range)
+    if date_range and getattr(draft, "status", "awaiting_range") == "awaiting_range":
+        await set_draft_range(db_session, draft, *date_range)
     return draft, extraction
 
 
@@ -152,7 +159,6 @@ async def get_timing(db: AsyncSession, event: Event) -> EventTiming:
         return timing
     return EventTiming(
         event_id=event.id,
-            all_day=bool(getattr(timing, "all_day", False)),
         start_at=event.deadline - timedelta(minutes=30),
         end_at=event.deadline,
     )
@@ -174,6 +180,24 @@ def format_interval(timing: EventTiming, timezone_name: str = "Europe/Moscow") -
 
 async def send_card(message: Message, event: Event, db: AsyncSession, source: str = "") -> None:
     timing = await get_timing(db, event)
+    try:
+        all_day_overlaps = await find_linked_all_day_overlaps(
+            db, "telegram", message.from_user.id, timing.start_at, timing.end_at,
+            exclude_ref=f"t:{event.id}",
+        )
+    except StopAsyncIteration:
+        all_day_overlaps = []
+    overlap_text = ""
+    if all_day_overlaps:
+        overlap_rows = "\n".join(
+            f"• {html.escape(item.event.title)} — {format_interval(item.timing, item.timezone_name)}"
+            for item in all_day_overlaps[:3]
+        )
+        suffix = "\n• …" if len(all_day_overlaps) > 3 else ""
+        overlap_text = (
+            "\n⚠️ У вас есть пересечение с мероприятием на весь день или дольше:\n"
+            f"{overlap_rows}{suffix}\nНовое событие всё равно можно добавить.\n"
+        )
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data=f"confirm:{event.id}")
     builder.button(text="❌ Отменить", callback_data=f"cancel:{event.id}")
@@ -191,11 +215,92 @@ async def send_card(message: Message, event: Event, db: AsyncSession, source: st
         f"{source_line}<b>{title}</b>\n"
         f"🕒 {format_interval(timing)}\n"
         f"{('📍 ' + description + chr(10)) if description else ''}"
+        f"{overlap_text}"
         f"\n<b>Напоминания:</b>\n{reminders_text}\n\n"
         "Добавить мероприятие в календарь?"
     )
     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await remember_dialogue_turn(
+        db, "telegram", message.from_user.id,
+        event_context_text(
+            event.title, timing.start_at, timing.end_at,
+            all_day=bool(getattr(timing, "all_day", False)),
+        ),
+        role="assistant", event_ref=f"t:{event.id}", commit=True,
+    )
 
+
+async def handle_chat_edit(
+    message: Message, db: AsyncSession, raw_text: str | None = None
+) -> bool:
+    """Apply a natural-language edit only when exactly one event is identified."""
+    raw_text = raw_text or message.text or ""
+    if not is_edit_request(raw_text):
+        return False
+    extracted = await pipeline.extract_text_input(
+        message.from_user.id, raw_text, db
+    )
+    result = await apply_chat_edit(
+        db, "telegram", message.from_user.id, raw_text, extracted
+    )
+    await remember_dialogue_turn(
+        db, "telegram", message.from_user.id,
+        pipeline.anonymizer.anonymize_text(raw_text), commit=True,
+    )
+    if result.status == "updated" and result.entry:
+        entry = result.entry
+        overlaps = await find_linked_all_day_overlaps(
+            db, "telegram", message.from_user.id,
+            entry.timing.start_at, entry.timing.end_at, exclude_ref=entry.ref,
+        )
+        warning = ""
+        if overlaps:
+            warning = "\n\n⚠️ Есть пересечение с событием на весь день или дольше: " + ", ".join(
+                f"«{item.event.title}»" for item in overlaps[:3]
+            ) + "."
+        await remember_dialogue_turn(
+            db, "telegram", message.from_user.id,
+            event_context_text(
+                entry.event.title, entry.timing.start_at, entry.timing.end_at,
+                all_day=bool(getattr(entry.timing, "all_day", False)),
+            ),
+            role="assistant", event_ref=entry.ref, commit=True,
+        )
+        await message.answer(
+            f"✅ Изменено: «{entry.event.title}» — "
+            f"{format_interval(entry.timing, entry.timezone_name)}.{warning}"
+        )
+        return True
+    if result.status == "ambiguous":
+        variants = "\n".join(
+            f"• {item.event.title} — {format_interval(item.timing, item.timezone_name)}"
+            for item in result.candidates
+        )
+        await message.answer(
+            "Нашёл несколько событий. Уточните название, исходную дату или время:\n"
+            + variants
+        )
+        return True
+    if result.status == "draft":
+        await message.answer(
+            "Это событие ещё ожидает подтверждения. Отмените карточку и отправьте "
+            "уточнённый вариант одним сообщением."
+        )
+        return True
+    if result.status == "past":
+        await message.answer(
+            "Это мероприятие уже прошло и осталось только в истории календаря. "
+            "Для изменения укажите будущее мероприятие."
+        )
+        return True
+    if result.status == "missing":
+        await message.answer(
+            "Не нашёл, какое событие изменить. Назовите его, например: "
+            "«перенеси контрольную по русскому завтра в 10»."
+        )
+        return True
+    await message.answer("Не удалось понять, что изменить. Укажите новое время или дату.")
+    return True
 
 @router.message(F.text)
 async def handle_text_input(message: Message, db_session: AsyncSession):
@@ -217,13 +322,10 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
             combined_prompt = " ".join(
                 part for part in (source.prompt.strip(), message.text.strip()) if part
             )
-            date_range = parse_date_range(combined_prompt)
-            if date_range is None:
-                await update_import_source_prompt(db_session, source, combined_prompt)
-                await message.answer(
-                    "Файл сохранён. Теперь укажите период двумя датами, например: "
-                    "«с 1 сентября по 1 декабря». Можно также уточнить группу или человека."
-                )
+            try:
+                date_range = parse_date_range(combined_prompt)
+            except ValueError as error:
+                await message.answer(f"❌ Некорректный период: {error}")
                 return
             status = await processing_status(message, "Ваш файл")
             try:
@@ -232,11 +334,22 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
                     source.filename, combined_prompt, date_range,
                 )
                 await finish_import_source(db_session, source)
-                await finish_status(status, "✅ Файл полностью обработан и проверен.")
-                await message.answer(
-                    verified_preview(draft, extraction),
-                    reply_markup=import_keyboard(draft.id),
-                )
+                if getattr(draft, "status", "awaiting_range") == "awaiting_range":
+                    await finish_status(status, "✅ Файл прочитан. Нужен период для повторов.")
+                    await message.answer(
+                        "В файле нет точных дат для повторяющегося расписания. "
+                        "Теперь укажите период двумя датами, например: «с 1 сентября по 1 декабря»."
+                    )
+                else:
+                    await finish_status(status, "✅ Файл полностью обработан и проверен.")
+                    await message.answer(
+                        verified_preview(draft, extraction),
+                        reply_markup=import_keyboard(draft.id),
+                    )
+            except ScheduleDocumentClarification as clarification:
+                await update_import_source_prompt(db_session, source, combined_prompt)
+                await finish_status(status, "🔎 Нужен один выбор из файла.")
+                await message.answer(f"🔎 {clarification}")
             except Exception as error:
                 await db_session.rollback()
                 logger.error("Saved schedule source processing failed: %s", error, exc_info=True)
@@ -245,19 +358,28 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
             return
         draft = await pending_draft(db_session, "telegram", message.from_user.id)
         if draft and draft.status == "awaiting_range":
-            if re.search(r"\b(?:отмена|отменить)\s+(?:импорт|расписание)\b", message.text, re.I):
+            if re.search(r"(?:отмена|отменить)\s+(?:импорт|расписание)", message.text, re.I):
                 await cancel_import(db_session, "telegram", message.from_user.id, draft.id)
                 await message.answer("Импорт расписания отменён.")
                 return
-            date_range = parse_date_range(message.text)
+            try:
+                date_range = parse_date_range(message.text)
+            except ValueError as error:
+                await message.answer(f"❌ Некорректный период: {error}")
+                return
             if date_range is None:
                 await message.answer(
-                    "Для распознанного расписания сначала укажите период, например: "
+                    "Для повторяющегося расписания укажите период, например: "
                     "«с 1 сентября по 1 декабря». Отменить: «отмена импорта»."
                 )
                 return
             await set_draft_range(db_session, draft, *date_range)
             await message.answer(import_preview(draft), reply_markup=import_keyboard(draft.id))
+            return
+        if is_edit_request(message.text):
+            status = await processing_status(message)
+            await handle_chat_edit(message, db_session)
+            await finish_status(status, "✅ Изменение обработано.")
             return
         status = await processing_status(message)
         events = await pipeline.process_text_input(
@@ -283,8 +405,13 @@ async def handle_voice_input(message: Message, db_session: AsyncSession):
     try:
         file_data = BytesIO()
         await message.bot.download(message.voice, destination=file_data)
-        events = await pipeline.process_voice_input(
-            message.from_user.id, file_data.getvalue(), db_session
+        transcript = await pipeline.speechkit_service.transcribe_voice(file_data.getvalue())
+        if is_edit_request(transcript):
+            await handle_chat_edit(message, db_session, transcript)
+            await finish_status(status, "✅ Изменение обработано.")
+            return
+        events = await pipeline.process_text_input(
+            message.from_user.id, transcript, db_session
         )
         await finish_status(status, "✅ Голосовое сообщение обработано.")
         for event in events:
@@ -293,6 +420,28 @@ async def handle_voice_input(message: Message, db_session: AsyncSession):
         logger.error("Interval voice pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать голосовое сообщение.")
         await message.answer(f"❌ Не удалось обработать голосовое сообщение: {error}")
+
+
+async def _send_schedule_draft(
+    message: Message, status: Message | None, draft, extraction: dict, subject: str
+) -> None:
+    if getattr(draft, "status", "awaiting_range") == "awaiting_range":
+        await finish_status(status, "✅ Файл прочитан. Нужен период для повторов.")
+        await message.answer(
+            "В файле нет точных дат для повторяющегося расписания. "
+            "Укажите период двумя датами, например: «с 1 сентября по 1 декабря»."
+        )
+        return
+    await finish_status(
+        status,
+        "✅ {} обработан и проверен: частей {}.".format(
+            subject, extraction.get("chunks_processed", 1)
+        ),
+    )
+    await message.answer(
+        verified_preview(draft, extraction),
+        reply_markup=import_keyboard(draft.id),
+    )
 
 
 @router.message(F.photo)
@@ -304,41 +453,26 @@ async def handle_photo_input(message: Message, db_session: AsyncSession):
         await message.bot.download(message.photo[-1], destination=file_data)
         content = file_data.getvalue()
         prompt = (message.caption or "").strip()
-        date_range = parse_date_range(prompt) if prompt else None
-        if prompt and date_range:
+        try:
+            date_range = parse_date_range(prompt) if prompt else None
+        except ValueError as error:
+            await finish_status(status, "❌ Некорректный период.")
+            await message.answer(f"❌ Некорректный период: {error}")
+            return
+        if prompt:
             draft, extraction = await create_verified_schedule_draft(
                 db_session, message.from_user.id, content,
                 "schedule.jpg", prompt, date_range,
             )
-            await finish_status(status, "✅ Изображение полностью обработано по инструкции.")
-            await message.answer(
-                verified_preview(draft, extraction),
-                reply_markup=import_keyboard(draft.id),
-            )
-            return
-        if prompt:
-            await save_import_source(
-                db_session, "telegram", message.from_user.id,
-                content, "schedule.jpg", prompt,
-            )
-            await finish_status(status, "✅ Изображение сохранено. Нужен период.")
-            await message.answer(
-                "Напишите период двумя датами, например: «с 1 сентября по 1 декабря». "
-                "Изображение повторно отправлять не нужно."
-            )
+            await _send_schedule_draft(message, status, draft, extraction, "Изображение")
             return
         weekly = await extract_weekly_schedule(content)
         if weekly:
-            await save_import_source(
-                db_session, "telegram", message.from_user.id,
-                content, "schedule.jpg",
+            draft, extraction = await create_verified_schedule_draft(
+                db_session, message.from_user.id, content,
+                "schedule.jpg", "", None,
             )
-            await finish_status(status, "✅ Расписание обнаружено и сохранено.")
-            await message.answer(
-                "Похоже, это расписание. Напишите одним сообщением, что выбрать, и период.\n\n"
-                "Например: «группа ПИ-241 с 1 сентября по 1 декабря». "
-                "Результат старого распознавателя не используется."
-            )
+            await _send_schedule_draft(message, status, draft, extraction, "Изображение")
             return
         events = await pipeline.process_image_input(
             message.from_user.id, content, db_session
@@ -346,6 +480,12 @@ async def handle_photo_input(message: Message, db_session: AsyncSession):
         await finish_status(status, "✅ Изображение обработано.")
         for event in events:
             await send_card(message, event, db_session, "🖼 Распознано из изображения")
+    except ScheduleDocumentClarification as clarification:
+        await save_import_source(
+            db_session, "telegram", message.from_user.id, content, "schedule.jpg", prompt
+        )
+        await finish_status(status, "🔎 Нужен один выбор из изображения.")
+        await message.answer(f"🔎 {clarification}")
     except Exception as error:
         logger.error("Interval image pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать изображение.")
@@ -373,29 +513,16 @@ async def handle_document_input(message: Message, db_session: AsyncSession):
             await finish_status(status, "❌ Некорректный период.")
             await message.answer(f"❌ Некорректный период: {error}")
             return
-        if date_range is None:
-            await save_import_source(
-                db_session, "telegram", message.from_user.id,
-                content, filename, prompt,
-            )
-            await finish_status(status, "✅ Файл сохранён. Жду инструкцию и период.")
-            await message.answer(
-                "Файл сохранён — повторно отправлять его не нужно. Напишите, что выбрать, "
-                "и период двумя датами. Например: «группа ПИ-241 с 1 сентября по 1 декабря»."
-            )
-            return
         draft, extraction = await create_verified_schedule_draft(
-            db_session, message.from_user.id, content,
-            filename, prompt, date_range,
+            db_session, message.from_user.id, content, filename, prompt, date_range
         )
-        await finish_status(
-            status,
-            f"✅ Файл обработан и проверен: частей {extraction['chunks_processed']}.",
+        await _send_schedule_draft(message, status, draft, extraction, "Файл")
+    except ScheduleDocumentClarification as clarification:
+        await save_import_source(
+            db_session, "telegram", message.from_user.id, content, filename, prompt
         )
-        await message.answer(
-            verified_preview(draft, extraction),
-            reply_markup=import_keyboard(draft.id),
-        )
+        await finish_status(status, "🔎 Нужен один выбор из файла.")
+        await message.answer(f"🔎 {clarification}")
     except Exception as error:
         await db_session.rollback()
         logger.error("Document schedule pipeline failed: %s", error, exc_info=True)
