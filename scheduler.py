@@ -13,6 +13,7 @@ from interval_models import EventTiming
 from models import Event, EventStatus, Reminder, ReminderStatus, User
 from reminder_service import delivery_state, reminder_preference
 from reminder_summary import daily_summary_text
+from handlers.onboarding import summary_keyboard
 
 logger = logging.getLogger("Scheduler")
 
@@ -146,7 +147,9 @@ async def check_and_send_reminders(bot: Bot, session_factory) -> None:
 async def send_daily_summaries(bot: Bot, session_factory) -> None:
     now_utc = datetime.now(timezone.utc)
     async with session_factory() as session:
-        users = (await session.execute(select(User))).scalars().all()
+        # Plain values: commit/rollback below expires ORM objects, and a lazy
+        # reload of an expired attribute is not allowed in async SQLAlchemy.
+        users = (await session.execute(select(User.tg_id, User.timezone))).all()
         for user in users:
             preference = await reminder_preference(
                 session, "telegram", user.tg_id
@@ -161,15 +164,11 @@ async def send_daily_summaries(bot: Bot, session_factory) -> None:
                 continue
             try:
                 text = await daily_summary_text(
-                    session, "telegram", user.tg_id, user.timezone, now_utc
-                )
-                builder = InlineKeyboardBuilder()
-                builder.button(
-                    text="📅 Открыть календарь", url=f"{settings.APP_URL}/calendar"
+                    session, "telegram", user.tg_id, user.timezone, now_utc, style="html"
                 )
                 await bot.send_message(
-                    chat_id=user.tg_id, text=text, parse_mode="Markdown",
-                    reply_markup=builder.as_markup(),
+                    chat_id=user.tg_id, text=text, parse_mode="HTML",
+                    reply_markup=summary_keyboard("today"),
                 )
                 preference.last_summary_date = local_now.date()
                 await session.commit()

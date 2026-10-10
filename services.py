@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import List, Optional
 import httpx
@@ -10,6 +11,7 @@ from schemas import UserCreate, EventCreate, EventUpdate
 from repositories import UserRepository, EventRepository, ReminderRepository
 from anonymizer import DataAnonymizer
 from ai_service import YandexGPTService
+from openrouter_service import NO_SPEECH_TEXT, chat_completion, transcribe_audio
 
 
 class UserService:
@@ -145,157 +147,73 @@ class EventService:
 logger = logging.getLogger("SpeechKitService")
 
 class SpeechKitService:
-    """
-    SpeechKitService coordinates integration with Yandex SpeechKit.
-    Recognizes short audio fragments (up to 30 seconds / 1MB limit for REST API)
-    using the official Yandex SpeechKit REST API.
-    """
-    def __init__(self):
-        self.api_key = settings.API_KEY
-        self.folder_id = settings.FOLDER_ID
-        self.url = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+    """Compatibility name for the voice parser backed by OpenRouter STT."""
 
     async def transcribe_voice(self, audio_bytes: bytes) -> str:
-        """
-        Transcribes a voice message (Ogg Opus format) using Yandex SpeechKit.
-        
-        :param audio_bytes: Raw binary data of the voice message.
-        :return: Transcribed text in Russian.
-        :raises ValueError: If credentials are not set, the audio is empty,
-                            or SpeechKit returns an empty text / error.
-        :raises httpx.HTTPStatusError: For non-success HTTP status codes.
-        """
-        if not self.api_key:
-            raise ValueError("Yandex SpeechKit API_KEY is not configured.")
-        if not self.folder_id:
-            raise ValueError("Yandex SpeechKit FOLDER_ID is not configured.")
-        if not audio_bytes:
-            raise ValueError("Audio data is empty.")
-
-        headers = {
-            "Authorization": f"Api-Key {self.api_key}"
-        }
-        params = {
-            "folderId": self.folder_id,
-            "lang": "ru-RU",
-            "format": "oggopus"
-        }
-
-        logger.info("Sending voice message to Yandex SpeechKit STT endpoint...")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    self.url,
-                    headers=headers,
-                    params=params,
-                    content=audio_bytes
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                logger.error(f"Yandex SpeechKit HTTP error: {e.response.status_code} - {e.response.text}")
-                raise
-            except httpx.RequestError as e:
-                logger.error(f"Yandex SpeechKit connection error: {e}")
-                raise ValueError(f"Yandex SpeechKit is currently unavailable: {e}")
-
-        try:
-            result_data = response.json()
-        except Exception as e:
-            logger.error(f"Failed to parse Yandex SpeechKit response JSON: {e}")
-            raise ValueError(f"Failed to parse Yandex SpeechKit response JSON: {e}")
-
-        text = result_data.get("result", "").strip()
-
+        # Telegram and MAX deliver Ogg/Opus voice messages. OpenRouter accepts
+        # the same bytes as a base64 ``ogg`` transcription input.
+        text = normalize_transcript(await transcribe_audio(audio_bytes, audio_format="ogg"))
         if not text:
-            logger.warning("Yandex SpeechKit returned empty transcription result.")
-            raise ValueError("Yandex SpeechKit returned an empty transcription.")
-
-        logger.info("Successfully transcribed voice message.")
+            raise ValueError(NO_SPEECH_TEXT)
         return text
 
 
+# Whisper "hears" these closing captions of videos in silence or noise.
+WHISPER_HALLUCINATION_RE = re.compile(
+    r"продолжение следует|субтитр|спасибо за просмотр|подписывайтесь|"
+    r"ставьте лайк|dimatorzok|редактор|корректор|музыка|аплодисменты|смех",
+    re.IGNORECASE,
+)
+
+
+def no_event_in_voice_text(transcript: str) -> str:
+    """Reply to a voice message without an event: show what was heard."""
+    return (
+        f"🎙 Распознано: «{transcript}»\n"
+        "Не нашёл здесь мероприятия. Назовите дату и время, например: "
+        "«завтра в 15:00 встреча»."
+    )
+
+
+def normalize_transcript(text: str) -> str:
+    """Speech-to-text output as a user would have typed it."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    # «Перенеси спортзал на восемь вечера». — quotes around the whole phrase.
+    text = re.sub(r"^[«\"'„“]+|[»\"'“”]+(?=[.!?…]*$)", "", text).strip()
+    words = re.findall(r"[^\W\d_]+", text)
+    if not words or (len(text) <= 60 and WHISPER_HALLUCINATION_RE.search(text)
+                     and len(WHISPER_HALLUCINATION_RE.sub("", text).split()) <= 3):
+        return ""
+    # «без пятнадцати шесть» is transcribed as «без 15.06» or «без 15:06».
+    text = re.sub(
+        r"\bбез\s+(\d{1,2})[.:](\d{1,2})\b",
+        lambda match: f"без {int(match[1])} минут {int(match[2])}",
+        text, flags=re.IGNORECASE,
+    )
+    return text
+
+
 class YandexOCRService:
-    """
-    YandexOCRService coordinates integration with Yandex Vision OCR API.
-    Recognizes text from images using the official Yandex Cloud OCR REST API.
-    """
-    def __init__(self):
-        self.api_key = settings.API_KEY
-        self.folder_id = settings.FOLDER_ID
-        self.url = "https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText"
+    """Legacy adapter name; image OCR is served by OpenRouter vision."""
 
     async def recognize_text(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
-        """
-        Recognizes text from an image using Yandex Vision OCR API.
-        
-        :param image_bytes: Raw binary data of the image.
-        :param mime_type: MIME type of the image (e.g. image/jpeg, image/png).
-        :return: Recognized text.
-        """
-        import base64
-        if not self.api_key:
-            raise ValueError("Yandex OCR API_KEY is not configured.")
-        if not self.folder_id:
-            raise ValueError("Yandex OCR FOLDER_ID is not configured.")
         if not image_bytes:
             raise ValueError("Image data is empty.")
-
-        # Encode image to Base64 string
-        base64_content = base64.b64encode(image_bytes).decode("utf-8")
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Api-Key {self.api_key}",
-            "x-folder-id": self.folder_id
-        }
-
-        payload = {
-            "mimeType": mime_type,
-            "content": base64_content,
-            "languageCodes": ["ru", "en"]
-        }
-
-        logger.info("Sending image to Yandex OCR endpoint...")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    self.url,
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                logger.error(f"Yandex OCR HTTP error: {e.response.status_code} - {e.response.text}")
-                raise
-            except httpx.RequestError as e:
-                logger.error(f"Yandex OCR connection error: {e}")
-                raise ValueError(f"Yandex OCR is currently unavailable: {e}")
-
-        try:
-            result_data = response.json()
-        except Exception as e:
-            logger.error(f"Failed to parse Yandex OCR response JSON: {e}")
-            raise ValueError(f"Failed to parse Yandex OCR response JSON: {e}")
-
-        # Extract text lines
-        text_lines = []
-        result = result_data.get("result", {})
-        text_page = result.get("textPage", {})
-        blocks = text_page.get("blocks", [])
-        for block in blocks:
-            lines = block.get("lines", [])
-            for line in lines:
-                line_text = line.get("text", "").strip()
-                if line_text:
-                    text_lines.append(line_text)
-                    
-        text = "\n".join(text_lines).strip()
-
+        import base64
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        response = await chat_completion(
+            model=settings.OPENROUTER_MODEL_FOR_OCR,
+            messages=[
+                {"role": "system", "content": "Перепиши текст с изображения без пояснений."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Распознай текст на изображении."},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}},
+                ]},
+            ],
+        )
+        text = str(response.choices[0].message.content or "").strip()
         if not text:
-            logger.warning("Yandex OCR returned empty text page.")
-            raise ValueError("На этом изображении не удалось распознать печатный текст расписания.")
-
-        logger.info(f"Successfully recognized text via Yandex OCR: {len(text)} chars.")
+            raise ValueError("OpenRouter OCR returned an empty result.")
         return text
 
 

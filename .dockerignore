@@ -15,3 +15,4 @@ test_*.py
 Dockerfile
 docker-compose.yml
 README.md
+*.zip

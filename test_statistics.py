@@ -136,7 +136,17 @@ def test_login_page_uses_borderless_custom_telegram_button():
     assert 'id="telegram-login"' in response.text
     assert "telegram-button" in response.text
     assert "telegram-widget.js" not in response.text
-    assert "/api/auth/${platform}/start" in response.text
+    assert "/api/auth/" + "$" + "{platform}/start" in response.text
+    assert 'href="/favicon.ico"' in response.text
+    assert 'src="/websitephoto.png"' in response.text
+    assert "bi-clock-fill" not in response.text
+
+
+def test_favicon_uses_uploaded_product_icon():
+    response = TestClient(app).get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
 
 
 @pytest.mark.anyio

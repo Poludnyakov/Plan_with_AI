@@ -13,6 +13,8 @@
             font-family: system-ui, sans-serif;
         }
         main { max-width: 420px; padding: 32px; text-align: center; }
+        .mascot { display: block; width: 120px; height: 120px; margin: 0 auto 6px; }
+        h1 { margin: 0 0 18px; font-size: 24px; }
         .spinner {
             width: 42px; height: 42px; margin: 0 auto 20px;
             border: 4px solid rgba(148, 163, 184, .25);
@@ -25,6 +27,8 @@
 </head>
 <body>
 <main>
+    <img class="mascot" src="/static/brand/emoji/wave.webp" alt="" width="120" height="120">
+    <h1>планиИруй!</h1>
     <div class="spinner" id="spinner"></div>
     <p id="status">Проверяем аккаунт Telegram…</p>
     <p id="error" hidden></p>
@@ -45,7 +49,12 @@
 
     async function authenticate() {
         if (!telegram || !telegram.initData) {
-            showError('Откройте календарь кнопкой Mini App внутри бота.');
+            // Telegram omits initData for reply-keyboard buttons. Such a button
+            // can still message the bot, which then sends a working button.
+            showError('Откройте календарь кнопкой «Календарь» слева от поля ввода в чате с ботом.');
+            if (telegram && telegram.platform !== 'unknown') {
+                try { telegram.sendData('open_calendar'); } catch (_) {}
+            }
             return;
         }
         telegram.ready();

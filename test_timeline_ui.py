@@ -29,7 +29,13 @@ def test_timeline_template_is_dependency_free():
         response = client.get("/mini-timeline")
         assert response.status_code == 200
         assert 'id="timeline"' in response.text
-        assert '<div class="calendar-brand"><span id="dateLabel"></span></div>' in response.text
+        assert '<span id="dateLabel"></span>' in response.text
+        # Dates scroll as a continuous ribbon, not in week pages, and the
+        # header jumps to any date.
+        assert 'id="datePicker" type="date"' in response.text
+        assert "week-page" not in response.text
+        assert "scroll-snap-type:x proximity" in response.text
+        assert "function selectDate(date)" in response.text
         assert '<div class="calendar-brand"><strong>' not in response.text
         assert 'id="start-at"' in response.text
         assert 'id="end-at"' in response.text
@@ -45,7 +51,14 @@ def test_timeline_template_is_dependency_free():
         assert "Math.abs(distance)<10" in response.text
         assert "drag-origin" in response.text
         assert "emptySlotClick" in response.text
-        assert "openCreate(atMinute(state.date,hour*60))" in response.text
+        assert "openCreate(atMinute(day,hour*60))" in response.text
+        # Desktop: Google Calendar style week, drag to create/move/resize, cards.
+        assert 'data-calendar-view="week"' in response.text
+        assert 'id="quickCreate"' in response.text and 'id="eventDetails"' in response.text
+        assert "function bindMouseDrag(" in response.text
+        assert "function bindSlotCreate(" in response.text
+        assert "resize-handle" in response.text
+        assert "label:'Отменить'" in response.text
         assert 'placeholder="Новое событие"' in response.text
         assert 'placeholder="Детали"' in response.text
         assert 'id="createReminders"' in response.text
@@ -53,5 +66,9 @@ def test_timeline_template_is_dependency_free():
         assert "collectReminderTimes" in response.text
         assert "Событие выделено" not in response.text
         assert "Нажмите ещё раз" not in response.text
+        assert 'href="https://t.me/plan_with_ai"' in response.text
+        assert 'href="https://max.ru/channel_planwithai"' in response.text
+        assert 'aria-label="Канал планиИруй! в Telegram"' in response.text
+        assert 'aria-label="Канал планиИруй! в MAX"' in response.text
     finally:
         app.dependency_overrides.clear()

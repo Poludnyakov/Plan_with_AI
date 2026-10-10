@@ -58,6 +58,42 @@ def test_date_only_intervals_become_all_day_and_default_text_is_safe():
     assert suitcase.end_at - suitcase.start_at == timedelta(days=1)
 
 
+@pytest.mark.parametrize("text", [
+    "завтра в полдень обед",
+    "в среду в пол третьего стоматолог",
+    "в понедельник без пятнадцати девять планёрка",
+    "завтра в шесть вечера ужин",
+    "к семи на тренировку",
+    "в 9 встреча",
+    "в 13.30 созвон",
+    "через полчаса позвонить маме",
+    "половина восьмого утра пробежка",
+])
+def test_time_named_in_words_keeps_the_time(text):
+    # The model returns the right clock time; it must not be erased.
+    event = IntervalExtraction(
+        title="Событие",
+        start_at=datetime(2026, 8, 20, 15, tzinfo=timezone.utc),
+        end_at=datetime(2026, 8, 20, 16, tzinfo=timezone.utc),
+    )
+    mark_default_all_day([event], text)
+    assert event.all_day is False
+
+
+@pytest.mark.parametrize("text", [
+    "в пятницу собрать вещи", "вечеринка в субботу", "день рождения мамы 25 октября",
+    "в семь лет пошёл в школу",
+])
+def test_dates_without_a_time_stay_all_day(text):
+    event = IntervalExtraction(
+        title="Событие",
+        start_at=datetime(2026, 8, 20, 9, tzinfo=timezone.utc),
+        end_at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc),
+    )
+    mark_default_all_day([event], text)
+    assert event.all_day is True
+
+
 @pytest.mark.anyio
 async def test_pipeline_persists_start_and_end(interval_db):
     pipeline = IntervalActionPipelineService()
@@ -69,7 +105,7 @@ async def test_pipeline_persists_start_and_end(interval_db):
         interval_db,
     )
     assert len(events) == 1
-    assert events[0].title == "физика"
+    assert events[0].title == "Физика"
     timing_result = await interval_db.execute(
         select(EventTiming).filter(EventTiming.event_id == events[0].id)
     )
@@ -157,3 +193,36 @@ def test_timeline_template_is_dependency_free(interval_db):
         assert "fullcalendar" not in response.text.lower()
     finally:
         app.dependency_overrides.clear()
+
+
+def test_named_weekday_that_already_passed_today_is_next_week():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from interval_ai_service import IntervalExtraction, roll_past_named_weekday
+    zone = ZoneInfo("Europe/Moscow")
+    now = datetime(2026, 10, 9, 20, 40, tzinfo=zone)  # Friday evening
+    def lab():
+        return IntervalExtraction(
+            title="Лабораторная", start_at=datetime(2026, 10, 9, 10, tzinfo=zone),
+            end_at=datetime(2026, 10, 9, 12, tzinfo=zone),
+        )
+    event = lab()
+    roll_past_named_weekday([event], "в пятницу с 10 до 12 лабораторная", now)
+    assert event.start_at.date().isoformat() == "2026-10-16"
+    # «Сегодня» or an exact date keeps the day the user named.
+    for text in ("сегодня в пятницу с 10 до 12 лабораторная", "в пятницу 9.10 с 10 до 12"):
+        event = lab()
+        roll_past_named_weekday([event], text, now)
+        assert event.start_at.date().isoformat() == "2026-10-09"
+
+
+def test_spoken_transcript_is_normalised():
+    from services import normalize_transcript
+    from chat_edit_service import is_edit_request
+    from interval_ai_service import _TIME_HINT_RE
+    assert normalize_transcript("«Перенеси спортзал на восемь вечера».") == "Перенеси спортзал на восемь вечера."
+    assert is_edit_request("Ну, пожалуйста, перенеси спортзал на 8")
+    assert normalize_transcript("Продолжение следует...") == ""
+    assert normalize_transcript("Сегодня без 15.06 встреча") == "Сегодня без 15 минут 6 встреча"
+    assert _TIME_HINT_RE.search("Через два часа созвон")
+    assert not _TIME_HINT_RE.search("через два дня сдать эссе")

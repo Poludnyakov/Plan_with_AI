@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from database import Base, get_db
-from max_bot.api import MaxApiClient, callback_button
+from max_bot.api import MaxApiClient, calendar_button, callback_button
 from max_bot.app import app
 from max_bot.auth import (
     sign_max_access_token,
@@ -115,7 +115,7 @@ async def test_max_draft_removes_internal_name_marker(max_db):
         "start_at": start,
         "end_at": start + timedelta(hours=1),
     }]))[0]
-    assert event.title == "физика"
+    assert event.title == "Физика"
 
 
 @pytest.mark.anyio
@@ -167,6 +167,8 @@ def test_max_miniapp_auth_cookie_bearer_and_templates():
             assert "window.WebApp" in page.text
             assert "/max/api/events" in timeline.text
             assert "planiruy_max_access_token" in timeline.text
+            assert 'href="https://t.me/plan_with_ai"' in timeline.text
+            assert 'href="https://max.ru/channel_planwithai"' in timeline.text
     finally:
         app.dependency_overrides.clear()
 
@@ -176,3 +178,18 @@ def test_max_webhook_rejects_wrong_secret_before_processing():
         client = TestClient(app, base_url="https://planwithai.ru")
         response = client.post("/max/webhook", json={"update_type": "bot_started"}, headers={"X-Max-Bot-Api-Secret": "wrong"})
     assert response.status_code == 401
+
+
+def test_calendar_button_names_the_bot_so_max_opens_the_mini_app():
+    # Without the bot in the button MAX may open the page as a website.
+    settings = SimpleNamespace(miniapp_name="", bot_username="@id_planwithai_bot")
+    client = SimpleNamespace(bot_info={"user_id": 4242, "username": "id_planwithai_bot"})
+    assert calendar_button(client, settings) == {
+        "type": "open_app", "text": "📅 Открыть календарь",
+        "web_app": "id_planwithai_bot", "contact_id": 4242,
+    }
+    # The profile from /me is enough when the username is not configured.
+    button = calendar_button(client, SimpleNamespace(miniapp_name=""))
+    assert button["web_app"] == "id_planwithai_bot" and button["contact_id"] == 4242
+    # An explicitly configured mini app name still wins.
+    assert calendar_button(client, SimpleNamespace(miniapp_name="planiruy"))["web_app"] == "planiruy"

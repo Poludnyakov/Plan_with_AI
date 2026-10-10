@@ -38,7 +38,7 @@ async def test_extract_schedule_text_success():
     with patch("openai.resources.chat.completions.AsyncCompletions.create", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = mock_response
         
-        with patch.object(settings, "API_KEY", "dummy_key"), patch.object(settings, "FOLDER_ID", "dummy_folder"):
+        with patch.object(settings, "OPENROUTER_API_KEY", "dummy_key"), patch.object(settings, "OPENROUTER_MODEL_FOR_TEXT", "text/model"):
             events = await extract_schedule_with_yandex("завтра лекция по матанализу у Иванова")
             
             assert len(events) == 1
@@ -55,7 +55,7 @@ async def test_extract_schedule_text_success():
             
             mock_create.assert_called_once()
             args, kwargs = mock_create.call_args
-            assert kwargs["model"] == "gpt://dummy_folder/yandexgpt/latest"
+            assert kwargs["model"] == "text/model"
             assert kwargs["response_format"] == {"type": "json_object"}
  
  
@@ -92,7 +92,7 @@ async def test_extract_schedule_image_success():
         mock_create.return_value = mock_response
         
         fake_image_bytes = b"fake_png_data_12345678"
-        with patch.object(settings, "API_KEY", "dummy_key"), patch.object(settings, "FOLDER_ID", "dummy_folder"):
+        with patch.object(settings, "OPENROUTER_API_KEY", "dummy_key"), patch.object(settings, "OPENROUTER_MODEL_FOR_OCR", "vision/model"):
             events = await extract_schedule_with_yandex(fake_image_bytes)
             
             assert len(events) == 1
@@ -101,7 +101,7 @@ async def test_extract_schedule_image_success():
             
             mock_create.assert_called_once()
             args, kwargs = mock_create.call_args
-            assert kwargs["model"] == "gpt://dummy_folder/qwen3.6-35b-a3b/latest"
+            assert kwargs["model"] == "vision/model"
             
             # Verify the structure of the message payload for image inputs
             messages = kwargs["messages"]
@@ -233,8 +233,7 @@ async def test_extract_schedule_system_prompt_dynamic_date():
 @pytest.mark.anyio
 async def test_extract_schedule_image_custom_model():
     """
-    Tests that extract_schedule_with_yandex correctly handles a custom YANDEX_CLOUD_MODEL configuration,
-    ensuring that it prepends gpt:// folder prefix only if not already present.
+    OpenRouter model IDs are passed through unchanged.
     """
     mock_json_response = {"events": []}
     mock_choice = AsyncMock()
@@ -246,18 +245,16 @@ async def test_extract_schedule_image_custom_model():
         mock_create.return_value = mock_response
         fake_image_bytes = b"fake_image_bytes"
         
-        # Scenario 1: Model name is a simple name (should prepend gpt://folder/)
-        with patch.object(settings, "API_KEY", "dummy_key"), \
-             patch.object(settings, "FOLDER_ID", "dummy_folder"), \
-             patch.object(settings, "YANDEX_CLOUD_MODEL", "custom-model/latest"):
+        # Scenario 1: a regular OpenRouter model ID
+        with patch.object(settings, "OPENROUTER_API_KEY", "dummy_key"), \
+             patch.object(settings, "OPENROUTER_MODEL_FOR_OCR", "custom-model/latest"):
             await extract_schedule_with_yandex(fake_image_bytes)
-            assert mock_create.call_args[1]["model"] == "gpt://dummy_folder/custom-model/latest"
+            assert mock_create.call_args[1]["model"] == "custom-model/latest"
             
-        # Scenario 2: Model name already starts with gpt://
+        # Scenario 2: a provider-qualified model ID
         mock_create.reset_mock()
-        with patch.object(settings, "API_KEY", "dummy_key"), \
-             patch.object(settings, "FOLDER_ID", "dummy_folder"), \
-             patch.object(settings, "YANDEX_CLOUD_MODEL", "gpt://another_folder/another_model/latest"):
+        with patch.object(settings, "OPENROUTER_API_KEY", "dummy_key"), \
+             patch.object(settings, "OPENROUTER_MODEL_FOR_OCR", "qwen/custom-vision"):
             await extract_schedule_with_yandex(fake_image_bytes)
-            assert mock_create.call_args[1]["model"] == "gpt://another_folder/another_model/latest"
+            assert mock_create.call_args[1]["model"] == "qwen/custom-vision"
 

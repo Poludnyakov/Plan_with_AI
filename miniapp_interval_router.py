@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import interval_models
+from calendar_import_api import CalendarImportRequest, run_import
 from config import settings
 from dashboard_router import get_cookie_secret, sign_tg_id, verify_tg_id
 from database import get_db
@@ -24,6 +25,7 @@ from models import Event, EventStatus, Reminder, ReminderStatus, User
 from telegram_miniapp_auth import validate_telegram_init_data
 from account_service import ensure_identity
 from schedule_service import list_schedule_occurrences
+from history_service import addition_history, delete_history_item, history_payload
 from unified_calendar import (
     create_linked_event,
     find_linked_all_day_overlaps,
@@ -225,6 +227,8 @@ async def mini_timeline(request: Request):
                 "reauthUrl": "/miniapp?destination=calendar",
                 "tokenKey": "planiruy_access_token",
                 "platform": "telegram",
+                "historyApi": "/api/v2/history",
+                "importApi": "/api/v2/calendar-import",
             },
         },
         headers={"Cache-Control": "no-store"},
@@ -318,3 +322,30 @@ async def delete_interval_event(
         return {"status": "deleted"}
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/api/v2/history")
+async def interval_history(
+    user_tg_id: int = Depends(get_miniapp_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return [history_payload(item) for item in await addition_history(db, "telegram", user_tg_id)]
+
+
+@router.delete("/api/v2/history/{ref:path}")
+async def delete_interval_history(
+    ref: str,
+    user_tg_id: int = Depends(get_miniapp_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return {"message": await delete_history_item(db, "telegram", user_tg_id, ref)}
+
+
+@router.post("/api/v2/calendar-import/{kind}")
+async def interval_calendar_import(
+    kind: str,
+    payload: CalendarImportRequest,
+    user_tg_id: int = Depends(get_miniapp_user_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await run_import(db, "telegram", user_tg_id, kind, payload)

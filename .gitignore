@@ -28,3 +28,44 @@ dist/
 .vscode/
 *.swp
 *.swo
+
+# Logs
+*.log
+
+# Merge leftovers
+*.orig
+*.rej
+
+# Test media: images, audio, archives
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.heic
+*.ogg
+*.mp3
+*.m4a
+*.wav
+*.zip
+
+# Test spreadsheets, documents, and calendars
+*.xlsx
+*.xls
+*.ods
+*.csv
+*.tsv
+*.docx
+*.pdf
+*.ics
+*.vcs
+
+# Scratch: keep only e2e scripts, ignore their outputs
+scratch/**
+!scratch/**/
+!scratch/**/*.py
+!scratch/**/*.js
+
+# Let's Encrypt data
+certbot/

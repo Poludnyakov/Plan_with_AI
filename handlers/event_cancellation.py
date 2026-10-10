@@ -181,7 +181,12 @@ async def delete_event_and_answer(
 
 @router.message(F.text.regexp(CANCEL_COMMAND_PATTERN))
 async def handle_cancellation_message(message: Message, db_session: AsyncSession):
-    query = strip_cancel_prefix(message.text or "")
+    await cancel_by_text(message, db_session, message.text or "")
+
+
+async def cancel_by_text(message: Message, db_session: AsyncSession, text: str) -> None:
+    """Delete an event named in a typed or spoken «отмени …» request."""
+    query = strip_cancel_prefix(text)
     if not query:
         await message.answer(
             "Напишите, какое мероприятие удалить. Например: «отмена контрольная по русскому»."
@@ -197,7 +202,7 @@ async def handle_cancellation_message(message: Message, db_session: AsyncSession
         from handlers.pipeline_handlers_intervals import pipeline
         await remember_dialogue_turn(
             db_session, "telegram", message.from_user.id,
-            pipeline.anonymizer.anonymize_text(message.text or ""), commit=True,
+            pipeline.anonymizer.anonymize_text(text), commit=True,
         )
         if not candidates:
             await message.answer(

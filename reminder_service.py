@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +69,24 @@ async def update_reminder_preference(
     return preference
 
 
+ALL_DAY_EVENING_HOUR = 19
+ALL_DAY_MORNING_HOUR = 9
+
+
+def all_day_reminder(
+    start_at: datetime, end_at: datetime, timezone_name: str, now: datetime | None = None
+) -> list[datetime]:
+    """One predictable reminder for a date-only event, never at night.
+
+    The evening before at 19:00; if that has passed, the morning of the day.
+    """
+    zone = ZoneInfo(timezone_name or "Europe/Moscow")
+    first_day = start_at.astimezone(zone).date()
+    evening = datetime.combine(first_day - timedelta(days=1), time(ALL_DAY_EVENING_HOUR), zone)
+    morning = datetime.combine(first_day, time(ALL_DAY_MORNING_HOUR), zone)
+    return valid_times((evening,), start_at, now) or valid_times((morning,), end_at, now)
+
+
 async def build_user_reminders(
     db: AsyncSession,
     platform: str,
@@ -85,8 +104,7 @@ async def build_user_reminders(
         return []
     limit = FREQUENCY_LIMITS.get(preference.frequency, 1)
     if all_day:
-        # A date-only event should always have one useful, predictable reminder.
-        day_before = valid_times((start_at - timedelta(days=1),), start_at, now)
+        day_before = all_day_reminder(start_at, end_at, timezone_name, now)
         if not preference.use_ai:
             return day_before
         suggestions = await recommend_reminders(

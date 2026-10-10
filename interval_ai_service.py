@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Optional, Union
 from zoneinfo import ZoneInfo
 
-from openai import AsyncOpenAI
+from openrouter_service import chat_completion, reasoning_setting
 from pydantic import BaseModel, Field, model_validator
 
 from config import settings
@@ -33,13 +33,23 @@ INTERVAL_SYSTEM_PROMPT = """
 4. Для формулировки «сдать до 18:00» создай 30-минутный блок, заканчивающийся в 18:00.
 5. Если пользователь назвал только дату или период дат, это событие НА ВЕСЬ ДЕНЬ: all_day=true, start_at — 00:00 первого дня, end_at — 00:00 дня после последнего. Не придумывай время 12:00. «Завтра собрать чемоданы» — all_day=true.
 6. Диапазон «с 13 по 15 августа» для all_day включает оба дня, то есть end_at должен быть 16 августа 00:00.
-7. end_at обязан быть строго позже start_at.
-8. Относительные даты вычисляй от переданных текущих даты и времени.
+7. end_at обязан быть строго позже start_at. Ночной интервал («с 22 до 2»)
+   заканчивается на следующий день. Но если окончание раньше начала и это не
+   ночь («с 18 до 16»), не переноси его на другой день: верни время как написано
+   (end_at раньше start_at) — приложение попросит пользователя проверить.
+7а. Срок без времени («до пятницы сдать эссе», «к 20 октября отчёт») — событие
+   на весь день В ДЕНЬ СРОКА (в пятницу, 20 октября), а не сегодня. «До конца
+   недели» — ближайшее воскресенье, «до конца месяца» — последний день месяца.
+8. Относительные даты вычисляй от переданных текущих даты и времени. День недели
+   без даты бери из списка ближайших дней выше.
 9. Пользователь находится в часовом поясе Europe/Moscow (+03:00).
 10. Если последнее сообщение просит перенести или изменить ранее упомянутое событие, используй историю только для разрешения «его», «её», «это» и верни желаемую итоговую версию этого события. Не извлекай отдельные события из истории.
+    Просьба перенести или изменить событие («перенеси спортзал на 15:30»)
+    всегда даёт ровно одно событие: название из сообщения и новое время, даже
+    если этого события нет в истории. Пустой список здесь недопустим.
 
-Формат:
-{"events":[{"title":"Контрольная","start_at":"2026-08-20T15:00:00+03:00","end_at":"2026-08-20T17:00:00+03:00","description":"","all_day":false}]}
+Формат (ГГГГ-ММ-ДД — вычисленная тобой дата, а не дата из примера):
+{"events":[{"title":"Контрольная","start_at":"ГГГГ-ММ-ДДT15:00:00+03:00","end_at":"ГГГГ-ММ-ДДT17:00:00+03:00","description":"","all_day":false}]}
 """
 
 
@@ -113,10 +123,39 @@ class IntervalExtraction(BaseModel):
 class IntervalListExtraction(BaseModel):
     events: List[IntervalExtraction]
 
-_TIME_HINT_RE = re.compile(
-    r"(?:\b(?:в|к|до)\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}:\d{2}\b|\b(?:утром|дн[её]м|вечером|ночью)\b)",
-    re.IGNORECASE,
+_HOUR_WORDS = (
+    r"(?:час|один|одного|два|двух|двум|три|тр[её]х|тр[её]м|четыре|четыр[её]х|четыр[её]м|"
+    r"пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|"
+    r"одиннадцать|одиннадцати|двенадцать|двенадцати)"
 )
+_ORDINAL_HOURS = (
+    r"(?:первого|второго|третьего|четв[её]ртого|пятого|шестого|седьмого|восьмого|"
+    r"девятого|десятого|одиннадцатого|двенадцатого)"
+)
+# «на 11» is a time; «на 11 октября», «10.11» or «с 1 по 7» are dates.
+_NOT_A_DAY = (
+    r"(?![./]\d)(?!\s*(?:-?го\s+)?(?:январ|феврал|март|апрел|ма[йя]|июн|июл|"
+    r"август|сентябр|октябр|ноябр|декабр|числ|по\s+\d))"
+)
+_PREPOSITION = r"\b(?:в|во|к|до|с|со|около|после|от|на)\s+"
+# Any way of naming a clock time in Russian; without one the event is all-day.
+_TIME_HINT_RE = re.compile("|".join((
+    r"\d{1,2}:\d{2}",
+    _PREPOSITION + r"\d{1,2}(?:[.-]\d{2})?\b" + _NOT_A_DAY,
+    r"\b\d{1,2}\s*(?:ч|час|часа|часов)\b",
+    r"\bв\s+обед\b",
+    _PREPOSITION + _HOUR_WORDS + r"\b(?!\s+(?:лет|год|раз|дн|недел|месяц|человек))",
+    r"\bпол[\s-]?" + _ORDINAL_HOURS + r"\b",
+    r"\b(?:половин[аеуы]|четверть)\s+" + _ORDINAL_HOURS + r"\b",
+    r"\bбез\s+(?:четверти|пяти|десяти|пятнадцати|двадцати|\d{1,2})\b",
+    r"\b(?:утра|утром|дн[её]м|вечера|вечером|ночи|ночью|полдень|полудня|полудню|"
+    r"полночь|полуночи|полуночью)\b",
+    # «в 3 часа дня», but not «через два дня».
+    r"(?:\bчас[аов]*|\b(?:в|к|до|с|со|около|после)\s+(?:\d{1,2}|" + _HOUR_WORDS + r"))\s+дня\b",
+    r"\bчерез\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять|шесть|десять|"
+    r"пятнадцать|двадцать|тридцать|сорок|пару|полтора|несколько)\s+)?"
+    r"(?:час|часа|часов|полчаса|минут[уы]?|мин)\b",
+)), re.IGNORECASE)
 
 
 def mark_default_all_day(events: List[IntervalExtraction], source: Union[str, bytes]) -> None:
@@ -139,18 +178,61 @@ def mark_default_all_day(events: List[IntervalExtraction], source: Union[str, by
         event.end_at = event.start_at.replace(year=end_date.year, month=end_date.month, day=end_date.day)
 
 
+WEEKDAY_NAMES = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+
+
+def upcoming_days_text(now: datetime) -> str:
+    """Exact dates of the coming weekdays: models miscount «в субботу» otherwise."""
+    lines = []
+    for offset in range(8):
+        day = now.date() + timedelta(days=offset)
+        label = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get(offset, "")
+        if offset == 7:
+            label = "через неделю"
+        name = WEEKDAY_NAMES[day.weekday()]
+        lines.append(f"{name} {day.isoformat()}" + (f" ({label})" if label else ""))
+    return (
+        "Ближайшие дни: " + "; ".join(lines) + ". «В субботу» — ближайшая суббота из "
+        "списка; день, совпадающий с сегодняшним, — сегодня, а если названное время "
+        "уже прошло — через неделю."
+    )
+
+
+_WEEKDAY_FORMS = (
+    r"понедельник\w*|пн", r"вторник\w*|вт", r"сред[аеуы]|ср", r"четверг\w*|чт",
+    r"пятниц[аеуы]|пт", r"суббот[аеуы]|сб", r"воскресень[еяю]|вс",
+)
+
+
+def roll_past_named_weekday(events: List[IntervalExtraction], source: Union[str, bytes], now: datetime) -> None:
+    """«В пятницу с 10 до 12», said on Friday evening, is next Friday.
+
+    A model sometimes picks today although that time has already passed.
+    """
+    if not isinstance(source, str):
+        return
+    text = source.casefold()
+    names_today = re.search(r"\b(?:" + _WEEKDAY_FORMS[now.weekday()] + r")\b", text)
+    if not names_today or re.search(r"\bсегодня\b|\d{1,2}[./]\d{1,2}|\d{1,2}\s+[а-я]+бря|\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа)", text):
+        return
+    for event in events:
+        local_start = event.start_at.astimezone(now.tzinfo)
+        if local_start.date() == now.date() and event.end_at <= now:
+            event.start_at += timedelta(days=7)
+            event.end_at += timedelta(days=7)
+
+
 async def extract_intervals(
     text_or_image: Union[str, bytes],
     context: list[str] | None = None,
 ) -> List[dict]:
-    if not settings.API_KEY:
-        raise ValueError("Yandex API_KEY is not configured.")
-    if not settings.FOLDER_ID:
-        raise ValueError("Yandex FOLDER_ID is not configured.")
+    if not settings.OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY is not configured.")
 
     now = datetime.now(ZoneInfo("Europe/Moscow"))
     system_prompt = (
         f"Сейчас {now.isoformat()}, день недели {now.strftime('%A')}.\n"
+        + upcoming_days_text(now) + "\n"
         + INTERVAL_SYSTEM_PROMPT
     )
     if context and not isinstance(text_or_image, bytes):
@@ -164,40 +246,28 @@ async def extract_intervals(
                 + history
             )
     is_image = isinstance(text_or_image, bytes)
-    base_url = "https://ai.api.cloud.yandex.net/v1" if is_image else settings.YANDEX_BASE_URL
-    client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=settings.API_KEY,
-        default_headers={
-            "Authorization": f"Api-Key {settings.API_KEY}",
-            "x-folder-id": settings.FOLDER_ID,
-        },
-    )
 
     if is_image:
         image_data = base64.b64encode(text_or_image).decode("ascii")
-        model_name = settings.YANDEX_CLOUD_MODEL
-        model = model_name if model_name.startswith("gpt://") else f"gpt://{settings.FOLDER_ID}/{model_name}"
+        model = settings.OPENROUTER_MODEL_FOR_OCR
         user_content = [
             {"type": "text", "text": "Извлеки мероприятия и интервалы времени из расписания."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}},
         ]
     else:
-        model = f"gpt://{settings.FOLDER_ID}/yandexgpt/latest"
+        model = settings.OPENROUTER_MODEL_FOR_TEXT
         user_content = text_or_image
 
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-    finally:
-        await client.close()
+    response = await chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+        reasoning=reasoning_setting(settings.OPENROUTER_TEXT_REASONING_EFFORT),
+    )
 
     response_text = response.choices[0].message.content or ""
     try:
@@ -218,7 +288,16 @@ async def extract_intervals(
             result = IntervalListExtraction.model_validate(payload)
         except Exception as error:
             logger.error("Invalid interval AI response: %s", response_text)
-            raise ValueError("Нейросеть вернула некорректное время мероприятия.") from error
+            if "end_at must be later" in str(error):
+                raise ValueError(
+                    "Окончание получилось раньше начала. Проверьте время, "
+                    "например: «с 16 до 18»."
+                ) from error
+            raise ValueError(
+                "Не получилось понять дату или время. Напишите их точнее, "
+                "например: «завтра в 15:00»."
+            ) from error
 
     mark_default_all_day(result.events, text_or_image)
+    roll_past_named_weekday(result.events, text_or_image, now)
     return [event.model_dump() for event in result.events]

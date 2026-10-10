@@ -1,6 +1,11 @@
+import json
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session_maker, init_db, get_db
@@ -42,6 +47,46 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+WEBSITE_ICON_PATH = Path(__file__).resolve().with_name("websitephoto.png")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/websitephoto.png", include_in_schema=False)
+async def website_icon() -> FileResponse:
+    """Serve the product icon for browser tabs and the login page."""
+    if not WEBSITE_ICON_PATH.is_file():
+        raise HTTPException(status_code=404, detail="Website icon is unavailable.")
+    return FileResponse(WEBSITE_ICON_PATH, media_type="image/png")
+
+
+STATIC_DIR = Path(__file__).resolve().with_name("static")
+try:
+    # The custom emoji set t.me/addemoji/planwithai, shown on the home page.
+    BRAND_PACK = json.loads((STATIC_DIR / "brand" / "pack" / "pack.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    BRAND_PACK = []
+app.mount("/static", StaticFiles(directory=STATIC_DIR, check_dir=False), name="static")
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing(request: Request):
+    """Public home page with the brand mascot and links to both bots."""
+    from dashboard_router import get_bot_username, templates
+
+    max_username = (os.getenv("MAX_BOT_USERNAME") or "").strip().lstrip("@")
+    return templates.TemplateResponse(
+        request=request,
+        name="landing.html",
+        context={
+            "request": request,
+            "bot_username": await get_bot_username(),
+            "max_url": f"https://max.ru/{max_username}" if max_username else "",
+            "pack": BRAND_PACK,
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 # Register the interactive web dashboard router
 from dashboard_router import router as dashboard_router
 app.include_router(dashboard_router)
@@ -49,6 +94,8 @@ from web_calendar_router import router as web_calendar_router
 app.include_router(web_calendar_router)
 from statistics_router import router as statistics_router
 app.include_router(statistics_router)
+from calendar_feed_router import router as calendar_feed_router
+app.include_router(calendar_feed_router)
 
 
 # ==========================================

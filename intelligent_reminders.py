@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from openai import AsyncOpenAI
+from openrouter_service import chat_completion
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -121,29 +121,16 @@ async def recommend_reminders(
 ) -> list[datetime]:
     current = _aware(now or datetime.now(timezone.utc))
     fallback = contextual_fallback(title, start_at, timezone_name, current)
-    if not settings.API_KEY or not settings.FOLDER_ID:
+    if not settings.OPENROUTER_API_KEY:
         return fallback
-    client = AsyncOpenAI(
-        base_url=settings.YANDEX_BASE_URL,
-        api_key=settings.API_KEY,
-        default_headers={
-            "Authorization": f"Api-Key {settings.API_KEY}",
-            "x-folder-id": settings.FOLDER_ID,
-        },
-    )
     user_prompt = (
         f"Сейчас: {current.isoformat()}\nЧасовой пояс: {timezone_name}\n"
         f"Событие: {title}\nОписание: {description or 'нет'}\n"
         f"Начало: {_aware(start_at).isoformat()}\nОкончание: {_aware(end_at).isoformat()}"
     )
-    model_name = settings.YANDEX_CLOUD_MODEL
-    model = (
-        model_name
-        if model_name.startswith("gpt://")
-        else f"gpt://{settings.FOLDER_ID}/{model_name}"
-    )
+    model = settings.OPENROUTER_MODEL_FOR_TEXT
     try:
-        response = await client.chat.completions.create(
+        response = await chat_completion(
             model=model,
             messages=[
                 {"role": "system", "content": SMART_REMINDER_PROMPT},
@@ -160,8 +147,6 @@ async def recommend_reminders(
     except Exception as error:
         logger.warning("AI reminder recommendation failed: %s", error, exc_info=True)
         return fallback
-    finally:
-        await client.close()
 
 
 async def build_reminders(

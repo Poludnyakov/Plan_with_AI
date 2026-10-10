@@ -36,8 +36,8 @@ def test_event_words_are_not_mistaken_for_personal_data(anonymizer):
 
 
 def test_internal_name_markers_are_removed_from_event_titles(anonymizer):
-    assert anonymizer.clean_event_title("[ФИО] по физике") == "физика"
-    assert anonymizer.clean_event_title("ФИО по физике") == "физика"
+    assert anonymizer.clean_event_title("[ФИО] по физике") == "Физика"
+    assert anonymizer.clean_event_title("ФИО по физике") == "Физика"
     assert anonymizer.clean_event_title("Встреча с [ФИО] завтра") == "Встреча завтра"
     assert (
         anonymizer.clean_event_title("Контрольная [ФИО] по физике")
@@ -173,3 +173,26 @@ def test_performance(anonymizer):
     
     # Assert execution duration is under 50ms (0.05 seconds) for extreme performance
     assert duration < 0.05, f"Anonymization is too slow: {duration:.3f}s"
+
+
+@pytest.mark.parametrize("title", [
+    "Олимпиада по программированию", "Вебинар: Право", "Хакатон в субботу",
+    "Олимпиада", "Субботник", "Вера в себя",
+])
+def test_event_words_are_not_taken_for_first_names(anonymizer, title):
+    assert anonymizer.anonymize_text(title) == title
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Позвонить Ирине", "Позвонить [ФИО]"),
+    ("встреча с Верой завтра", "встреча с [ФИО] завтра"),
+    ("обед с Сашей", "обед с [ФИО]"),
+])
+def test_names_are_masked_without_neighbouring_words(anonymizer, text, expected):
+    assert anonymizer.anonymize_text(text) == expected
+
+
+def test_title_cleanup_leaves_no_empty_brackets(anonymizer):
+    masked = anonymizer.anonymize_text("Базы данных (Петров)")
+    assert anonymizer.clean_event_title(masked) == "Базы данных"
+    assert anonymizer.clean_event_title("[ФИО] и [ФИО] в кино") == "В кино"

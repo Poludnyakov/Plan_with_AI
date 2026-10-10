@@ -50,6 +50,7 @@ async def init_db() -> None:
         import reminder_models  # noqa: F401
         import conversation_models  # noqa: F401
         import statistics_models  # noqa: F401
+        import calendar_import_models  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
         # create_all() does not add columns to already deployed PostgreSQL tables.
         # This migration is additive and keeps every existing timed event unchanged.
@@ -61,4 +62,8 @@ async def init_db() -> None:
             await conn.execute(text(
                 "ALTER TABLE max_event_timings "
                 "ADD COLUMN IF NOT EXISTS all_day BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE schedule_import_drafts "
+                "ADD COLUMN IF NOT EXISTS source_name VARCHAR(255)"
             ))

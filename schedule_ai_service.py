@@ -4,7 +4,7 @@ import logging
 from datetime import time
 from typing import Literal
 
-from openai import AsyncOpenAI
+from openrouter_service import chat_completion
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from config import settings
@@ -36,6 +36,8 @@ SCHEDULE_PROMPT = """
 
 weekday: понедельник=0, ..., воскресенье=6.
 week_pattern: every, odd или even. Если чётность не указана — every.
+Числитель, I неделя — odd; знаменатель, II неделя — even. Пометки отдельных
+недель («кр. 1 н.», «1,5,9,13 н.») оставь в начале title как на изображении.
 Не выдумывай неразборчивые названия и время. Если это не недельное расписание
 или структура ненадёжна, верни is_recurring_schedule=false и пустой slots.
 Дата начала и конца семестра здесь не нужна: пользователь введёт её отдельно.
@@ -99,21 +101,12 @@ def _normalize_keys(value):
 
 async def extract_weekly_schedule(image_bytes: bytes) -> dict | None:
     """Return a strict weekly schedule or None so callers can use legacy OCR."""
-    if not image_bytes or not settings.API_KEY or not settings.FOLDER_ID:
+    if not image_bytes or not settings.OPENROUTER_API_KEY:
         return None
-    client = AsyncOpenAI(
-        base_url="https://ai.api.cloud.yandex.net/v1",
-        api_key=settings.API_KEY,
-        default_headers={
-            "Authorization": f"Api-Key {settings.API_KEY}",
-            "x-folder-id": settings.FOLDER_ID,
-        },
-    )
-    model_name = settings.YANDEX_CLOUD_MODEL
-    model = model_name if model_name.startswith("gpt://") else f"gpt://{settings.FOLDER_ID}/{model_name}"
+    model = settings.OPENROUTER_MODEL_FOR_OCR
     encoded = base64.b64encode(image_bytes).decode("ascii")
     try:
-        response = await client.chat.completions.create(
+        response = await chat_completion(
             model=model,
             messages=[
                 {"role": "system", "content": SCHEDULE_PROMPT},
@@ -130,8 +123,6 @@ async def extract_weekly_schedule(image_bytes: bytes) -> dict | None:
     except Exception as error:
         logger.warning("Weekly schedule detection failed; using legacy image path: %s", error)
         return None
-    finally:
-        await client.close()
 
     reliable = [slot for slot in parsed.slots if slot.confidence >= 0.60]
     enough_structure = len(reliable) >= 2 and len({slot.weekday for slot in reliable}) >= 2

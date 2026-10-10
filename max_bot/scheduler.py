@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload
 from reminder_service import delivery_state, reminder_preference
 from reminder_summary import daily_summary_text
 
-from .api import MaxApiClient, callback_button, open_app_button
+from .api import MaxApiClient, calendar_button, callback_button
 from .config import settings
 from .models import MaxEvent, MaxEventTiming, MaxReminder, MaxUser
 
@@ -110,7 +110,9 @@ async def send_due_reminders(client: MaxApiClient, session_factory) -> None:
 async def send_daily_summaries(client: MaxApiClient, session_factory) -> None:
     now_utc = datetime.now(timezone.utc)
     async with session_factory() as db:
-        users = (await db.execute(select(MaxUser))).scalars().all()
+        # Plain values: commit/rollback below expires ORM objects, and a lazy
+        # reload of an expired attribute is not allowed in async SQLAlchemy.
+        users = (await db.execute(select(MaxUser.max_user_id, MaxUser.timezone))).all()
         for user in users:
             preference = await reminder_preference(db, "max", user.max_user_id)
             zone = ZoneInfo(user.timezone)
@@ -129,9 +131,10 @@ async def send_daily_summaries(client: MaxApiClient, session_factory) -> None:
                 await client.send_message(
                     text,
                     user_id=user.max_user_id,
-                    buttons=[[open_app_button(
-                        "📅 Открыть календарь", settings.miniapp_name or None
-                    )]],
+                    buttons=[
+                        [callback_button("📊 План на неделю", "summary_switch:week")],
+                        [calendar_button(client, settings)],
+                    ],
                 )
                 preference.last_summary_date = local_now.date()
                 await db.commit()

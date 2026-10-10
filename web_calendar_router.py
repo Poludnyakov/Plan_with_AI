@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from account_models import AccountIdentity, WebLoginTicket
 from account_service import aware, create_web_login_ticket, ensure_identity
+from calendar_import_api import CalendarImportRequest, run_import
 from dashboard_router import get_bot_username, get_cookie_secret, verify_tg_id
 from database import get_db
 from max_bot.config import settings as max_settings
@@ -24,6 +25,7 @@ from unified_calendar import (
     update_linked_event,
 )
 from schedule_service import list_schedule_occurrences
+from history_service import addition_history, delete_history_item, history_payload
 
 
 router = APIRouter(tags=["Web calendar"])
@@ -113,6 +115,8 @@ async def web_calendar(request: Request, db: AsyncSession = Depends(get_db)):
                 "reauthUrl": "/login",
                 "tokenKey": "",
                 "platform": "web",
+                "historyApi": "/api/calendar/history",
+                "importApi": "/api/calendar/import",
             },
         },
         headers={"Cache-Control": "no-store"},
@@ -249,3 +253,23 @@ async def web_delete(event_ref: str, request: Request, db: AsyncSession = Depend
         return {"status": "deleted"}
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/api/calendar/history")
+async def browser_history(request: Request, db: AsyncSession = Depends(get_db)):
+    platform, external_id, _ = await browser_identity(request, db)
+    return [history_payload(item) for item in await addition_history(db, platform, external_id)]
+
+
+@router.delete("/api/calendar/history/{ref:path}")
+async def delete_browser_history(ref: str, request: Request, db: AsyncSession = Depends(get_db)):
+    platform, external_id, _ = await browser_identity(request, db)
+    return {"message": await delete_history_item(db, platform, external_id, ref)}
+
+
+@router.post("/api/calendar/import/{kind}")
+async def browser_calendar_import(
+    kind: str, payload: CalendarImportRequest, request: Request, db: AsyncSession = Depends(get_db),
+):
+    platform, external_id, _ = await browser_identity(request, db)
+    return await run_import(db, platform, external_id, kind, payload)

@@ -1,0 +1,22 @@
+const { chromium } = require('playwright');
+const fs = require('fs');
+const initData = fs.readFileSync(__dirname + '/initdata.txt', 'utf8').trim();
+(async () => {
+  const b = await chromium.launch();
+  const c = await b.newContext({ viewport: { width: 390, height: 760 }, deviceScaleFactor: 2, hasTouch: true, timezoneId: 'Europe/Moscow' });
+  const p = await c.newPage();
+  await p.route('https://telegram.org/js/telegram-web-app.js', r => r.fulfill({ contentType: 'application/javascript', body: `window.Telegram={WebApp:{initData:${JSON.stringify(initData)},platform:'android',ready(){},expand(){}}};` }));
+  await p.goto('http://127.0.0.1:8077/miniapp'); await p.waitForURL(/mini-timeline/); await p.waitForTimeout(1200);
+  await p.click('[data-calendar-view="history"]'); await p.waitForTimeout(1000);
+  await p.screenshot({ path: __dirname + '/look_history.png' });
+  await p.click('[data-calendar-view="timeline"]');
+  await p.evaluate(() => { const i = document.getElementById('datePicker'); i.value = '2027-03-03'; i.dispatchEvent(new Event('change')); });
+  await p.waitForTimeout(500); await p.screenshot({ path: __dirname + '/look_empty.png' });
+  const s = await c.newPage(); await s.route('https://telegram.org/js/telegram-web-app.js', r => r.fulfill({ contentType: 'application/javascript', body: 'window.Telegram={WebApp:{initData:"",platform:"unknown"}};' }));
+  await s.goto('http://127.0.0.1:8077/miniapp'); await s.waitForTimeout(500); await s.screenshot({ path: __dirname + '/look_splash.png' });
+  const l = await c.newPage(); await l.goto('http://127.0.0.1:8077/', { waitUntil: 'networkidle' });
+  await l.locator('#emoji').scrollIntoViewIfNeeded(); await l.evaluate(async () => { for (const i of document.querySelectorAll('#emoji img')) await i.decode().catch(()=>{}); });
+  await l.locator('#emoji').screenshot({ path: __dirname + '/look_pack.png' });
+  const k = await c.newPage(); await k.goto('http://127.0.0.1:8077/calendar/connect/aaaaaaaaaaaaaaaaaaaaaaaa', { waitUntil: 'networkidle' }); await k.screenshot({ path: __dirname + '/look_connect.png' });
+  await b.close();
+})();

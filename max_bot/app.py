@@ -1,7 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from database import async_session_maker, init_db
 
@@ -33,11 +35,23 @@ async def lifespan(app: FastAPI):
     scheduler = setup_full_scheduler(client, handler, async_session_maker)
     try:
         try:
+            await client.me()
+        except Exception:
+            logger.exception("Could not read the MAX bot profile; calendar buttons use MAX_BOT_USERNAME")
+        try:
             await client.set_commands([
                 {"name": "start", "description": "Запустить ассистента"},
+                {"name": "help", "description": "Как пользоваться ботом"},
+                {"name": "tour", "description": "Обучение за минуту"},
+                {"name": "today", "description": "План на сегодня"},
+                {"name": "week", "description": "План на 7 дней"},
                 {"name": "calendar", "description": "Открыть календарь"},
                 {"name": "list", "description": "Показать расписание"},
                 {"name": "link", "description": "Объединить Telegram и MAX"},
+                {"name": "history", "description": "История добавлений и удаление"},
+                {"name": "calendars", "description": "Подключить Apple, Google, Яндекс календарь"},
+                {"name": "import", "description": "Загрузить события из другого календаря"},
+                {"name": "caldav", "description": "Загрузить календарь по CalDAV"},
                 {"name": "smart_reminders", "description": "Настроить умные напоминания"},
             ])
         except Exception:
@@ -62,3 +76,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="планиИруй! для MAX", lifespan=lifespan)
 app.include_router(router)
+# Brand images; in production nginx sends /static to the main app anyway.
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).resolve().parents[1] / "static", check_dir=False),
+    name="static",
+)

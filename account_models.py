@@ -69,3 +69,15 @@ class WebLoginTicket(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+
+
+class CalendarFeedToken(Base):
+    """Secret of an account's read-only iCalendar link (Apple, Google, Yandex)."""
+
+    __tablename__ = "calendar_feed_tokens"
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("unified_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

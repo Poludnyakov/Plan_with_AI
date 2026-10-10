@@ -4,156 +4,77 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>планиИруй! — Вход в личный кабинет</title>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Bootstrap 5 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
-    
+    <link rel="icon" type="image/png" href="/favicon.ico">
+    <meta name="theme-color" content="#3478f6">
     <style>
         :root {
-            --bg-page: #FCFCFD;
-            --bg-panel: #FFFFFF;
-            --border-color: #E5E5E5;
-            --text-primary: #1A1A1A;
-            --text-secondary: #5F6368;
-            --yandex-red: #FC3F1D;
-            --yandex-red-hover: #E33516;
-            --transition-speed: 0.2s;
+            --bg:#f3f5f9; --surface:#fff; --text:#182033; --muted:#5f6878; --line:#e4e8ef;
+            --primary:#2563d9; --primary-soft:#e8f0ff; --telegram:#0b78b8; --max:#7448e6;
+            --shadow:0 1px 2px #1118270d, 0 12px 32px #1f3a7a14;
         }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
+        * { box-sizing:border-box; margin:0; padding:0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-page);
-            color: var(--text-primary);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
+            font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;
+            background:var(--bg); color:var(--text); min-height:100vh; min-height:100dvh;
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:18px; padding:24px 16px; -webkit-font-smoothing:antialiased;
         }
-
+        .home-link {
+            display:inline-flex; align-items:center; gap:9px; color:var(--text); text-decoration:none;
+            font-size:21px; font-weight:850; letter-spacing:-.02em;
+        }
+        .home-link img { width:32px; height:32px; }
         .login-card {
-            background: var(--bg-panel);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.05), 0 1px 3px 1px rgba(60, 64, 67, 0.08);
-            width: 100%;
-            max-width: 440px;
-            padding: 40px;
-            text-align: center;
-            animation: fadeIn 0.4s ease-out;
+            position:relative; width:100%; max-width:430px; padding:84px 32px 28px; margin-top:64px;
+            background:var(--surface); border-radius:24px; box-shadow:var(--shadow); text-align:center;
+            animation:fadeIn .35s ease-out;
         }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+        .mascot {
+            position:absolute; left:50%; top:-74px; width:150px; height:150px; transform:translateX(-50%);
+            filter:drop-shadow(0 14px 22px #1f3a7a2e);
         }
-
-        .logo-container {
-            margin-bottom: 24px;
-        }
-
-        .logo-text {
-            font-size: 28px;
-            font-weight: 800;
-            color: var(--text-primary);
-            letter-spacing: -0.8px;
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            text-decoration: none;
-        }
-        
-        .logo-text i {
-            color: var(--yandex-red);
-            font-size: 30px;
-        }
-
-        h1 {
-            font-size: 22px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-primary);
-        }
-
-        p {
-            font-size: 14px;
-            color: var(--text-secondary);
-            line-height: 1.6;
-            margin-bottom: 32px;
-        }
-
-        .widget-container {
-            display: flex;
-            justify-content: center;
-            margin-bottom: 0;
-        }
+        h1 { font-size:24px; font-weight:820; letter-spacing:-.02em; margin-bottom:10px; }
+        p { font-size:15px; color:var(--muted); line-height:1.55; margin-bottom:26px; }
+        .widget-container { display:flex; justify-content:center; }
         .messenger-button {
-            width: 100%;
-            min-height: 50px;
-            border: 0;
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            color: #fff;
-            font-size: 15px;
-            font-weight: 750;
-            cursor: pointer;
-            box-shadow: 0 8px 20px rgba(34, 158, 217, .18);
-            transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+            width:100%; min-height:52px; border:0; border-radius:15px; display:flex; align-items:center;
+            justify-content:center; gap:10px; color:#fff; font:inherit; font-size:16px; font-weight:750;
+            cursor:pointer; transition:transform .16s ease, box-shadow .16s ease, opacity .16s ease;
         }
-        .messenger-button:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(34, 158, 217, .24); }
-        .messenger-button:active { transform: translateY(0); }
-        .messenger-button:disabled { opacity: .6; cursor: wait; transform: none; }
-        .telegram-button { background: linear-gradient(135deg, #2aabee, #229ed9); }
-        .max-button { background: linear-gradient(135deg, #8b54f6, #6940db); box-shadow: 0 8px 20px rgba(105,64,219,.18); }
-        .messenger-icon { width: 22px; height: 22px; flex: 0 0 auto; fill: currentColor; }
-        .login-divider { display:flex; align-items:center; gap:12px; margin:18px 0; color:#9aa0a6; font-size:12px; }
-        .login-divider::before,.login-divider::after { content:""; height:1px; flex:1; background:var(--border-color); }
-        .login-flow { display:none; margin-top:14px; padding:13px; border-radius:12px; background:#f5f3ff; color:#3b2b68; font-size:13px; line-height:1.5; }
-        .login-flow.telegram-flow { background:#eef8fd; color:#20536d; }
-        .login-flow a { display:inline-block; margin-top:8px; color:#6530cf; font-weight:700; }
-        .login-flow.telegram-flow a { color:#167daf; }
+        .messenger-button:hover { transform:translateY(-1px); }
+        .messenger-button:active { transform:none; }
+        .messenger-button:disabled { opacity:.6; cursor:wait; transform:none; }
+        .messenger-button:focus-visible, a:focus-visible { outline:3px solid #3478f680; outline-offset:3px; }
+        .telegram-button { background:var(--telegram); box-shadow:0 8px 20px #0b78b840; }
+        .max-button { background:var(--max); box-shadow:0 8px 20px #7448e638; }
+        .messenger-icon { width:22px; height:22px; flex:0 0 auto; fill:currentColor; }
+        .login-divider { display:flex; align-items:center; gap:12px; margin:16px 0; color:var(--muted); font-size:13px; }
+        .login-divider::before,.login-divider::after { content:""; height:1px; flex:1; background:var(--line); }
+        .login-flow { display:none; margin-top:14px; padding:13px; border-radius:14px; background:#f3efff; color:#3b2b68; font-size:14px; line-height:1.5; text-align:left; }
+        .login-flow.telegram-flow { background:#eaf6fd; color:#1d5470; }
+        .login-flow a { display:inline-block; margin-top:8px; color:#5b2fd0; font-weight:750; }
+        .login-flow.telegram-flow a { color:#0f76a8; }
         .login-code { display:block; margin-top:6px; font:700 15px ui-monospace,monospace; letter-spacing:.4px; overflow-wrap:anywhere; }
-
-        .footer-text {
-            font-size: 12px;
-            color: #9AA0A6;
-            margin-top: 16px;
+        .footer-text { font-size:13px; color:var(--muted); margin-top:20px; line-height:1.5; }
+        .footer-text a { color:var(--primary); font-weight:650; text-decoration:none; }
+        .footer-text a:hover { text-decoration:underline; }
+        @media (prefers-color-scheme: dark) {
+            :root { --bg:#11151b; --surface:#191e26; --text:#eef1f6; --muted:#a9b0bd; --line:#303743; --primary:#7aa8ff; --shadow:0 1px 2px #0006, 0 12px 32px #0005; }
+            .login-flow { background:#2a2440; color:#ddd3ff; } .login-flow a { color:#c1aaff; }
+            .login-flow.telegram-flow { background:#17324a; color:#cfe9fb; } .login-flow.telegram-flow a { color:#8fd0ff; }
         }
-
-        .footer-text a {
-            color: var(--yandex-red);
-            text-decoration: none;
-        }
-
-        .footer-text a:hover {
-            text-decoration: underline;
-        }
+        @media (max-width: 420px) { .login-card { padding:78px 20px 24px; } .mascot { width:132px; height:132px; top:-64px; } }
     </style>
 </head>
 <body>
 
-    <div class="login-card">
-        <div class="logo-container">
-            <span class="logo-text">
-                <i class="bi bi-clock-fill"></i>планиИруй!
-            </span>
-        </div>
-        
-        <h1>Вход в личный кабинет</h1>
-        <p>Подключите ваш Telegram, чтобы автоматически синхронизировать учебное расписание, дедлайны и настроить мгновенные уведомления о задачах.</p>
-        
+    <a class="home-link" href="/" aria-label="планиИруй! — на главную"><img src="/websitephoto.png" alt="" width="32" height="32">планиИруй!</a>
+    <main class="login-card">
+        <img class="mascot" src="/static/brand/emoji/wave.webp" alt="" width="150" height="150">
+        <h1>Вход в календарь</h1>
+        <p>Войдите через мессенджер, в котором пользуетесь ботом, — откроется тот же календарь с событиями, расписанием и напоминаниями.</p>
+
         <div class="widget-container">
             <button class="messenger-button telegram-button" id="telegram-login" type="button">
                 <svg class="messenger-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -168,11 +89,11 @@
         <div class="login-flow" id="max-flow"></div>
         
         <div class="footer-text">
-            Нажимая кнопку, вы авторизуетесь через официальный сервис Telegram.
+            Вход подтверждается в самом боте — пароль не нужен.
             <br>
-            Возникли вопросы? <a href="https://t.me/{{ bot_username }}" target="_blank">Перейти к боту</a>
+            Ещё не пользуетесь? <a href="https://t.me/{{ bot_username }}" target="_blank" rel="noopener">Открыть бота</a> · <a href="/">О сервисе</a>
         </div>
-    </div>
+    </main>
 
     <script>
     (() => {

@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from handlers.pipeline_handlers_intervals import handle_document_input, processing_status
+from handlers.pipeline_handlers_intervals import (
+    _send_schedule_draft,
+    handle_document_input,
+    processing_status,
+)
 from max_bot.handler import MaxUpdateHandler
 from schedule_document_service import ScheduleDocumentClarification
 
@@ -19,6 +23,33 @@ async def test_telegram_processing_status_uses_complete_readable_phrase():
 
     assert result is status
     message.answer.assert_awaited_once_with("⏳ Ваш файл обрабатывается…")
+
+
+@pytest.mark.anyio
+async def test_telegram_auto_imports_verified_schedule_with_undo_and_replace():
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=321),
+        answer=AsyncMock(),
+    )
+    db = MagicMock(spec=AsyncSession)
+    draft = SimpleNamespace(id=17, status="ready")
+
+    with patch(
+        "handlers.pipeline_handlers_intervals.confirm_import",
+        new_callable=AsyncMock,
+        return_value=("created", 1),
+    ) as confirm, patch(
+        "handlers.pipeline_handlers_intervals.import_summary", return_value="Сводка импорта"
+    ):
+        await _send_schedule_draft(
+            message, None, db, draft, {"chunks_processed": 2}, "Файл"
+        )
+
+    confirm.assert_awaited_once_with(db, "telegram", 321, 17)
+    sent = message.answer.await_args
+    assert sent.args[0] == "Сводка импорта"
+    assert sent.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "schedule_undo:17"
+    assert sent.kwargs["reply_markup"].inline_keyboard[1][0].callback_data == "schedule_replace:17"
 
 
 @pytest.mark.anyio
@@ -54,11 +85,13 @@ async def test_max_file_is_processed_with_prompt_and_visible_status():
          patch("max_bot.handler.pending_draft", new_callable=AsyncMock, return_value=None), \
          patch("max_bot.handler.create_import_draft", new_callable=AsyncMock, return_value=draft), \
          patch("max_bot.handler.set_draft_range", new_callable=AsyncMock), \
-         patch("max_bot.handler.import_preview", return_value="Предпросмотр"):
+         patch("max_bot.handler.confirm_import", new_callable=AsyncMock, return_value=("created", 1)) as confirm, \
+         patch("max_bot.handler.import_summary", return_value="Сводка импорта"):
+
         await handler.handle_message({
             "sender": {"user_id": 321},
             "body": {
-                "text": "выбери смены Анны с 1 сентября по 1 декабря",
+                "text": "выбери смены Анны с 1 сентября 2026 по 1 декабря 2026",
                 "attachments": [{
                     "type": "file",
                     "payload": {
@@ -72,14 +105,19 @@ async def test_max_file_is_processed_with_prompt_and_visible_status():
 
     first = client.send_message.await_args_list[0]
     assert first.args[0] == "⏳ Ваш файл обрабатывается…"
-    assert client.send_message.await_args_list[-1].args[0] == (
-        "✅ Источник проверен.\nПроверка покрытия: Чт из источника Чт\n\nПредпросмотр"
-    )
-    parse.assert_awaited_once_with(
+    final_message = client.send_message.await_args_list[-1]
+    assert final_message.args[0] == "Сводка импорта"
+    assert final_message.kwargs["buttons"][0][0]["payload"] == "schedule_undo:17"
+    assert final_message.kwargs["buttons"][1][0]["payload"] == "schedule_replace:17"
+    confirm.assert_awaited_once_with(db, "max", 321, 17)
+    parse.assert_awaited_once()
+    parse_args = parse.await_args
+    assert parse_args.args == (
         b"spreadsheet", "schedule.xlsx",
-        "выбери смены Анны с 1 сентября по 1 декабря",
-        valid_range=(date(2026, 9, 1), date(2026, 12, 1)),
+        "выбери смены Анны с 1 сентября 2026 по 1 декабря 2026",
     )
+    assert parse_args.kwargs["valid_range"] == (date(2026, 9, 1), date(2026, 12, 1))
+    assert callable(parse_args.kwargs["progress"])
 
 
 

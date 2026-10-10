@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from calendar_import_api import CalendarImportRequest, run_import
 from database import async_session_maker, get_db
 from interval_pipeline import REMINDER_OFFSETS, normalize_datetime
 
@@ -30,6 +31,7 @@ from unified_calendar import (
     update_linked_event,
 )
 from schedule_service import list_schedule_occurrences
+from history_service import addition_history, delete_history_item, history_payload
 
 
 logger = logging.getLogger("MaxWeb")
@@ -195,6 +197,8 @@ async def timeline(request: Request):
                 "reauthUrl": "/max/miniapp",
                 "tokenKey": "planiruy_max_access_token",
                 "platform": "max",
+                "historyApi": "/max/api/history",
+                "importApi": "/max/api/calendar-import",
             },
         },
         headers={"Cache-Control": "no-store"},
@@ -269,3 +273,21 @@ async def remove(event_id: str, max_user_id: int = Depends(authenticated_user_id
         return {"status": "deleted"}
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/api/history")
+async def history(max_user_id: int = Depends(authenticated_user_id), db: AsyncSession = Depends(get_db)):
+    return [history_payload(item) for item in await addition_history(db, "max", max_user_id)]
+
+
+@router.delete("/api/history/{ref:path}")
+async def delete_history(ref: str, max_user_id: int = Depends(authenticated_user_id), db: AsyncSession = Depends(get_db)):
+    return {"message": await delete_history_item(db, "max", max_user_id, ref)}
+
+
+@router.post("/api/calendar-import/{kind}")
+async def calendar_import(
+    kind: str, payload: CalendarImportRequest,
+    max_user_id: int = Depends(authenticated_user_id), db: AsyncSession = Depends(get_db),
+):
+    return await run_import(db, "max", max_user_id, kind, payload)

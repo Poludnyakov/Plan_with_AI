@@ -33,6 +33,13 @@ def aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+PAST_EVENT_TEXT = "\n⚠️ Это время уже прошло. Проверьте дату перед добавлением.\n"
+
+
+def is_past(end_at: datetime, now: datetime | None = None) -> bool:
+    return aware(end_at) <= aware(now or datetime.now(timezone.utc))
+
+
 def entry_is_past(entry: CalendarEntry, now: datetime | None = None) -> bool:
     """Return true when an event belongs only to calendar history."""
     current = aware(now or datetime.now(timezone.utc))
@@ -267,8 +274,14 @@ async def _replace_reminders(
     else:
         times = sorted({aware(value) for value in explicit_times})
     times = sorted({aware(value) for value in times})
-    if any(value > aware(entry.timing.start_at) for value in times):
-        raise ValueError("Уведомление должно быть не позже начала мероприятия")
+    # A date-only event lasts the whole day: «09:00 on the day» is in time.
+    all_day = bool(getattr(entry.timing, "all_day", False))
+    limit = aware(entry.timing.end_at if all_day else entry.timing.start_at)
+    if any(value > limit for value in times):
+        raise ValueError(
+            "Уведомление должно быть не позже конца дня мероприятия" if all_day
+            else "Уведомление должно быть не позже начала мероприятия"
+        )
     if entry.source == "telegram":
         reminders = (await db.execute(
             select(Reminder).filter(

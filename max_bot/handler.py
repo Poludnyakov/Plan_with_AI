@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import re
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .api import MaxApiClient, callback_button, open_app_button
+from .api import MaxApiClient, calendar_button, callback_button
 from .calendar import delete_max_yandex, sync_max_yandex
 from conversation_service import event_context_text, remember_dialogue_turn
 from chat_edit_service import apply_chat_edit, is_edit_request
@@ -21,25 +22,37 @@ from schedule_service import (
     cancel_import,
     confirm_import,
     create_import_draft,
+    discard_pending_imports,
     finish_import_source,
     import_preview,
+    import_summary,
     parse_date_range,
     parse_occurrence_date,
     pending_draft,
     pending_import_source,
     save_import_source,
+    schedule_overlap_note,
     set_draft_range,
+    supersedes_pending_import,
+    is_bare_period,
+    BARE_PERIOD_TEXT,
     skip_candidates,
     skip_occurrence,
     update_import_source_prompt,
+    undo_import,
+    import_source_label,
 )
 from reminder_service import acknowledge_delivery
+from openrouter_service import public_error_text
+from services import no_event_in_voice_text
 from unified_calendar import (
     delete_linked_event,
     entry_is_upcoming,
     find_linked_all_day_overlaps,
     find_linked_conflict,
     get_owned_entry,
+    is_past,
+    PAST_EVENT_TEXT,
 )
 from .service import CANCEL_RE, MaxEventService, format_interval
 
@@ -55,7 +68,7 @@ class MaxUpdateHandler:
         self.client, self.service, self.settings = client, service, settings
 
     def app_button(self):
-        return open_app_button("📅 Открыть календарь", self.settings.miniapp_name or None)
+        return calendar_button(self.client, self.settings)
 
     async def welcome(self, user_id: int) -> None:
         await self.client.send_message(
@@ -66,6 +79,12 @@ class MaxUpdateHandler:
             user_id=user_id,
             buttons=[[self.app_button()]],
         )
+
+    def event_card_buttons(self, event: MaxEvent) -> list[list[dict]]:
+        return [[
+            callback_button("✅ Подтвердить", f"confirm:{event.id}"),
+            callback_button("❌ Отменить", f"cancel:{event.id}"),
+        ]]
 
     async def send_event_card(self, user_id: int, event: MaxEvent, db: AsyncSession, source: str = "") -> None:
         timing = event.timing
@@ -87,20 +106,20 @@ class MaxUpdateHandler:
                 "\n⚠️ У вас есть пересечение с мероприятием на весь день или дольше:\n"
                 f"{overlap_rows}{suffix}\nНовое событие всё равно можно добавить.\n"
             )
+        zone = ZoneInfo("Europe/Moscow")
         reminders = "\n".join(
-            f"• {item.remind_at.astimezone():%d.%m в %H:%M}" for item in sorted(event.reminders, key=lambda x: x.remind_at)
+            f"• {item.remind_at.astimezone(zone):%d.%m в %H:%M}" for item in sorted(event.reminders, key=lambda x: x.remind_at)
         ) or "• Нет будущих напоминаний"
         text = (
             (source + "\n" if source else "") + f"**{event.title}**\n"
             f"🕒 {format_interval(timing.start_at, timing.end_at, all_day=bool(getattr(timing, "all_day", False)))}\n"
             + (f"📍 {event.description}\n" if event.description else "")
             + overlap_text
+            + await schedule_overlap_note(db, "max", user_id, timing)
+            + (PAST_EVENT_TEXT if is_past(timing.end_at) else "")
             + f"\n**Напоминания:**\n{reminders}\n\nДобавить мероприятие в календарь?"
         )
-        await self.client.send_message(text, user_id=user_id, buttons=[[
-            callback_button("✅ Подтвердить", f"confirm:{event.id}"),
-            callback_button("❌ Отменить", f"cancel:{event.id}"),
-        ]])
+        await self.client.send_message(text, user_id=user_id, buttons=self.event_card_buttons(event))
         await remember_dialogue_turn(
             db, "max", user_id,
             event_context_text(
@@ -218,6 +237,7 @@ class MaxUpdateHandler:
                 "application/vnd.ms-excel": ".xls",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
                 "text/csv": ".csv",
+                "text/calendar": ".ics",
                 "text/plain": ".txt",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
                 "image/png": ".png",
@@ -232,6 +252,14 @@ class MaxUpdateHandler:
         except Exception:
             # The status is informational and must never interrupt processing.
             logger.warning("Could not send MAX processing status", exc_info=True)
+
+    def schedule_progress_reporter(self, user_id: int):
+        async def report(text: str) -> None:
+            try:
+                await self.client.send_message(f"⏳ {text}", user_id=user_id)
+            except Exception:
+                logger.warning("Could not send MAX schedule progress", exc_info=True)
+        return report
 
     @staticmethod
     def verified_preview(draft, extraction: dict) -> str:
@@ -261,9 +289,10 @@ class MaxUpdateHandler:
         filename: str,
         prompt: str,
         date_range=None,
+        progress=None,
     ):
         extraction = await parse_schedule_document(
-            content, filename, prompt, valid_range=date_range
+            content, filename, prompt, valid_range=date_range, progress=progress
         )
         for slot in extraction["slots"]:
             slot["title"] = self.service.anonymizer.clean_event_title(
@@ -272,12 +301,16 @@ class MaxUpdateHandler:
             slot["description"] = self.service.anonymizer.clean_display_text(
                 self.service.anonymizer.anonymize_text(slot.get("description", ""))
             )
-        draft = await create_import_draft(db, "max", user_id, extraction)
+        draft = await create_import_draft(
+            db, "max", user_id, extraction, import_source_label(filename)
+        )
         if date_range and getattr(draft, "status", "awaiting_range") == "awaiting_range":
             await set_draft_range(db, draft, *date_range)
         return draft, extraction
 
-    async def send_schedule_preview(self, user_id: int, draft, extraction: dict) -> None:
+    async def send_schedule_preview(
+        self, db: AsyncSession, user_id: int, draft, extraction: dict
+    ) -> None:
         if getattr(draft, "status", "awaiting_range") == "awaiting_range":
             await self.client.send_message(
                 "В файле нет точных дат для повторяющегося расписания. "
@@ -285,12 +318,25 @@ class MaxUpdateHandler:
                 user_id=user_id,
             )
             return
+        state, created = await confirm_import(db, "max", user_id, draft.id)
+        if state == "imported":
+            await self.client.send_message(
+                "Это расписание уже было добавлено.",
+                user_id=user_id,
+                buttons=[
+                    [callback_button("↩️ Отменить импорт", f"schedule_undo:{draft.id}")],
+                    [callback_button("✏️ Заменить расписание", f"schedule_replace:{draft.id}")],
+                ],
+            )
+            return
+        if state != "created":
+            raise ValueError("Не удалось добавить проверенное расписание в календарь.")
         await self.client.send_message(
-            self.verified_preview(draft, extraction),
+            import_summary(draft, created),
             user_id=user_id,
             buttons=[
-                [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
-                [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
+                [callback_button("↩️ Отменить импорт", f"schedule_undo:{draft.id}")],
+                [callback_button("✏️ Заменить расписание", f"schedule_replace:{draft.id}")],
             ],
         )
 
@@ -344,6 +390,9 @@ class MaxUpdateHandler:
             return
 
         source = await pending_import_source(db, "max", user_id)
+        if source and supersedes_pending_import(text):
+            await discard_pending_imports(db, "max", user_id)
+            source = None
         if source:
             if re.search(
                 r"\b(?:отмена|отменить)\s+(?:импорт|расписание)\b", text, re.I
@@ -366,9 +415,10 @@ class MaxUpdateHandler:
                 draft, extraction = await self.create_verified_schedule_draft(
                     db, user_id, source.content, source.filename,
                     combined_prompt, date_range,
+                    progress=self.schedule_progress_reporter(user_id),
                 )
+                await self.send_schedule_preview(db, user_id, draft, extraction)
                 await finish_import_source(db, source)
-                await self.send_schedule_preview(user_id, draft, extraction)
             except ScheduleDocumentClarification as clarification:
                 await update_import_source_prompt(db, source, combined_prompt)
                 await self.client.send_message(f"🔎 {clarification}", user_id=user_id)
@@ -378,7 +428,7 @@ class MaxUpdateHandler:
                     "Saved MAX schedule source processing failed: %s", error,
                     exc_info=True,
                 )
-                await self.client.send_message(f"❌ {error}", user_id=user_id)
+                await self.client.send_message(f"❌ {public_error_text(error)}", user_id=user_id)
             return
 
         draft = await pending_draft(db, "max", user_id)
@@ -396,11 +446,8 @@ class MaxUpdateHandler:
                 )
                 return
             await set_draft_range(db, draft, *date_range)
-            await self.client.send_message(
-                import_preview(draft), user_id=user_id, buttons=[
-                    [callback_button("✅ Добавить расписание", f"schedule_confirm:{draft.id}")],
-                    [callback_button("❌ Отменить импорт", f"schedule_cancel:{draft.id}")],
-                ],
+            await self.send_schedule_preview(
+                db, user_id, draft, {"chunks_processed": 0}
             )
             return
         attachments = body.get("attachments") or []
@@ -423,9 +470,10 @@ class MaxUpdateHandler:
                 date_range = parse_date_range(text) if text else None
                 filename = self.attachment_name(document)
                 draft, extraction = await self.create_verified_schedule_draft(
-                    db, user_id, content, filename, text, date_range
+                    db, user_id, content, filename, text, date_range,
+                    progress=self.schedule_progress_reporter(user_id),
                 )
-                await self.send_schedule_preview(user_id, draft, extraction)
+                await self.send_schedule_preview(db, user_id, draft, extraction)
                 return
 
             image = next((x for x in attachments if x.get("type") == "image"), None)
@@ -441,18 +489,23 @@ class MaxUpdateHandler:
                     draft, extraction = await self.create_verified_schedule_draft(
                         db, user_id, image_content, self.attachment_name(image),
                         text, date_range,
+                        progress=self.schedule_progress_reporter(user_id),
                     )
-                    await self.send_schedule_preview(user_id, draft, extraction)
+                    await self.send_schedule_preview(db, user_id, draft, extraction)
                     return
                 weekly = await extract_weekly_schedule(image_content)
                 if weekly:
                     draft, extraction = await self.create_verified_schedule_draft(
                         db, user_id, image_content, self.attachment_name(image),
                         "", None,
+                        progress=self.schedule_progress_reporter(user_id),
                     )
-                    await self.send_schedule_preview(user_id, draft, extraction)
+                    await self.send_schedule_preview(db, user_id, draft, extraction)
                     return
             if text and not text.startswith("/") and not attachments:
+                if is_bare_period(text):
+                    await self.client.send_message(BARE_PERIOD_TEXT, user_id=user_id)
+                    return
                 await self.processing_status(user_id)
                 if await self.handle_chat_edit(user_id, text, db):
                     return
@@ -479,8 +532,14 @@ class MaxUpdateHandler:
                     transcript = await self.service.speechkit.transcribe_voice(content)
                     if await self.handle_chat_edit(user_id, transcript, db):
                         return
+                    if CANCEL_RE.match(transcript):
+                        await self.handle_cancellation(user_id, transcript, db)
+                        return
                     events = await self.service.from_text(db, user_id, transcript)
                     source = "🎙 Распознано из голосового сообщения"
+                    if not events:
+                        await self.client.send_message(no_event_in_voice_text(transcript), user_id=user_id)
+                        return
             if not events:
                 await self.client.send_message("Не удалось найти мероприятие. Укажите дату и время точнее.", user_id=user_id)
             for event in events:
@@ -496,7 +555,7 @@ class MaxUpdateHandler:
         except Exception as error:
             await db.rollback()
             logger.error("MAX input processing failed: %s", error, exc_info=True)
-            await self.client.send_message(f"❌ Не удалось обработать сообщение: {error}", user_id=user_id)
+            await self.client.send_message(f"❌ Не удалось обработать сообщение. {public_error_text(error)}", user_id=user_id)
 
     async def handle_cancellation(self, user_id: int, text: str, db: AsyncSession) -> None:
         if not CANCEL_RE.match(text).group(1).strip():
@@ -578,6 +637,47 @@ class MaxUpdateHandler:
                     text="Импорт расписания отменён. Календарь не изменён." if cancelled else None,
                     notification="Импорт отменён" if cancelled else "Черновик уже закрыт",
                 )
+                return
+            if action == "schedule_undo":
+                state, removed = await undo_import(db, "max", user_id, int(event_text))
+                if state == "undone":
+                    await self.client.answer_callback(
+                        callback_id,
+                        text=(
+                            f"↩️ Импорт отменён: удалено {removed} элементов расписания.\n"
+                            "Остальные личные события и другие расписания не затронуты."
+                        ),
+                        notification="Импорт отменён",
+                    )
+                elif state == "already_undone":
+                    await self.client.answer_callback(
+                        callback_id, notification="Этот импорт уже отменён"
+                    )
+                else:
+                    await self.client.answer_callback(
+                        callback_id, notification="Импорт не найден или ещё не был добавлен"
+                    )
+                return
+            if action == "schedule_replace":
+                state, removed = await undo_import(db, "max", user_id, int(event_text))
+                if state == "undone":
+                    await self.client.answer_callback(
+                        callback_id,
+                        text=(
+                            f"✏️ Удалено {removed} элементов этого импорта.\n\n"
+                            "Пришлите новый файл или фото расписания — его можно дополнить "
+                            "подписью с нужной группой или инструкцией."
+                        ),
+                        notification="Старое расписание снято",
+                    )
+                elif state == "already_undone":
+                    await self.client.answer_callback(
+                        callback_id, notification="Старый импорт уже отменён"
+                    )
+                else:
+                    await self.client.answer_callback(
+                        callback_id, notification="Этот импорт нельзя заменить"
+                    )
                 return
             if action == "skip_schedule":
                 skipped = await skip_occurrence(db, "max", user_id, event_text)

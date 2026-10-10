@@ -25,7 +25,39 @@ class Settings:
                         # Set environment variable if not already set
                         os.environ.setdefault(key, val)
         
-        # Load keys from environment
+        # OpenRouter is the single provider for text, file, image and audio
+        # parsing. OPENROUTER_URL may be either the API root or the concrete
+        # chat-completions URL supplied in the deployment environment.
+        self.OPENROUTER_URL = (
+            os.getenv("OPENROUTER_URL")
+            or "https://openrouter.ai/api/v1/chat/completions"
+        )
+        self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+        self.OPENROUTER_MODEL_FOR_TEXT = os.getenv("OPENROUTER_MODEL_FOR_TEXT")
+        self.OPENROUTER_MODEL_FOR_AUDIO = os.getenv("OPENROUTER_MODEL_FOR_AUDIO")
+        self.OPENROUTER_MODEL_FOR_FILES = os.getenv("OPENROUTER_MODEL_FOR_FILES")
+        # Document extraction should reserve its output budget for event JSON.
+        self.OPENROUTER_DOCUMENT_REASONING_EFFORT = os.getenv(
+            "OPENROUTER_DOCUMENT_REASONING_EFFORT", "none"
+        ).strip().casefold()
+        # A short message needs no hidden reasoning: with it the same model
+        # answers in 20–90 s instead of 1–3 s and still makes the same mistakes.
+        self.OPENROUTER_TEXT_REASONING_EFFORT = os.getenv(
+            "OPENROUTER_TEXT_REASONING_EFFORT", "none"
+        ).strip().casefold()
+        # Spreadsheet fragments are independent and are read in parallel.
+        try:
+            self.OPENROUTER_DOCUMENT_CONCURRENCY = max(
+                1, int(os.getenv("OPENROUTER_DOCUMENT_CONCURRENCY") or "4")
+            )
+        except ValueError:
+            self.OPENROUTER_DOCUMENT_CONCURRENCY = 4
+        self.OPENROUTER_MODEL_FOR_OCR = os.getenv("OPENROUTER_MODEL_FOR_OCR")
+        self.OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER")
+        self.OPENROUTER_APP_TITLE = os.getenv("OPENROUTER_APP_TITLE")
+
+        # Legacy Yandex variables remain only for calendar synchronisation and
+        # backwards-compatible local setups. AI parsers must use OpenRouter.
         self.API_KEY = os.getenv("YANDEX_API_KEY") or os.getenv("API_KEY")
         self.FOLDER_ID = os.getenv("FOLDER_IR") or os.getenv("FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID")
         self.YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL") or "https://llm.api.cloud.yandex.net/v1"
@@ -48,6 +80,10 @@ class Settings:
         except ValueError:
             self.YANDEX_DOCUMENT_MAX_READER_FRAGMENTS = 4
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
+        # Brand custom emoji need Telegram Premium on the bot owner's account.
+        self.TELEGRAM_CUSTOM_EMOJI = (
+            os.getenv("TELEGRAM_CUSTOM_EMOJI", "1").strip().casefold() not in {"0", "false", "no", "off"}
+        )
         self.APP_URL = os.getenv("APP_URL") or "http://localhost:8000"
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
         self.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")

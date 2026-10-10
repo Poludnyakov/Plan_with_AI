@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from conversation_service import latest_event_ref
+from interval_ai_service import _TIME_HINT_RE
 from interval_pipeline import normalize_datetime
 from unified_calendar import (
     CalendarEntry,
@@ -22,8 +23,10 @@ from unified_calendar import (
 )
 
 
+# Spoken requests start with fillers: «Ну, пожалуйста, перенеси спортзал…».
+LEAD_IN = r"^[\s«\"'(—–-]*(?:(?:ну|так|слушай|короче|пожалуйста|давай|а|эээ|э|можешь|можно)[\s,.!—–-]+)*"
 EDIT_RE = re.compile(
-    r"^\s*(?:измени(?:ть)?|поменяй|перенеси(?:ть)?|сдвинь|сдвинуть|"
+    LEAD_IN + r"(?:измени(?:ть)?|поменяй|перенеси(?:ть)?|сдвинь|сдвинуть|"
     r"передвинь|передвинуть|переименуй|назови|исправь|редактируй)\b",
     re.IGNORECASE,
 )
@@ -145,7 +148,8 @@ def _merged_interval(entry: CalendarEntry, desired: dict, raw_text: str) -> tupl
     old_end = _aware(entry.timing.end_at).astimezone(zone)
     parsed_start = normalize_datetime(desired["start_at"], entry.timezone_name).astimezone(zone)
     parsed_end = normalize_datetime(desired["end_at"], entry.timezone_name).astimezone(zone)
-    has_date, has_time = bool(DATE_RE.search(raw_text)), bool(TIME_RE.search(raw_text))
+    has_date = bool(DATE_RE.search(raw_text))
+    has_time = bool(TIME_RE.search(raw_text) or _TIME_HINT_RE.search(raw_text))
     explicit_all_day = bool(ALL_DAY_RE.search(raw_text))
     old_all_day = bool(getattr(entry.timing, "all_day", False))
 

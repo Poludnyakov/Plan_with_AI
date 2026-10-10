@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from chat_edit_service import apply_chat_edit, is_edit_request
+from handlers.event_cancellation import CANCEL_PREFIX_RE, cancel_by_text
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
@@ -18,6 +19,8 @@ from interval_calendar_sync import sync_yandex_interval
 from conversation_service import event_context_text, remember_dialogue_turn
 from interval_models import EventTiming
 from interval_pipeline import IntervalActionPipelineService
+from services import no_event_in_voice_text
+from openrouter_service import public_error_text
 from models import Event, EventStatus, User
 from schedule_ai_service import extract_weekly_schedule
 from schedule_document_service import (
@@ -29,19 +32,32 @@ from schedule_service import (
     cancel_import,
     confirm_import,
     create_import_draft,
+    discard_pending_imports,
     finish_import_source,
     import_preview,
+    import_summary,
     parse_date_range,
     parse_occurrence_date,
     pending_draft,
     pending_import_source,
     save_import_source,
+    schedule_overlap_note,
     set_draft_range,
+    supersedes_pending_import,
+    is_bare_period,
+    BARE_PERIOD_TEXT,
     skip_candidates,
     skip_occurrence,
     update_import_source_prompt,
+    undo_import,
+    import_source_label,
 )
-from unified_calendar import find_linked_all_day_overlaps, find_linked_conflict
+from unified_calendar import (
+    PAST_EVENT_TEXT,
+    find_linked_all_day_overlaps,
+    find_linked_conflict,
+    is_past,
+)
 
 
 logger = logging.getLogger("IntervalPipelineHandlers")
@@ -53,9 +69,18 @@ SKIP_SCHEDULE_RE = re.compile(
 
 
 def import_keyboard(draft_id: int):
+    """Legacy buttons for drafts created before automatic import."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Добавить расписание", callback_data=f"schedule_confirm:{draft_id}")
     builder.button(text="❌ Отменить импорт", callback_data=f"schedule_cancel:{draft_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def imported_schedule_keyboard(draft_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="↩️ Отменить импорт", callback_data=f"schedule_undo:{draft_id}")
+    builder.button(text="✏️ Заменить расписание", callback_data=f"schedule_replace:{draft_id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -74,6 +99,12 @@ async def finish_status(status: Message | None, text: str) -> None:
     except Exception:
         # A status message is informational and must never fail the pipeline.
         pass
+
+
+def schedule_progress_reporter(status: Message | None):
+    async def report(text: str) -> None:
+        await finish_status(status, f"⏳ {text}")
+    return report
 
 
 def verified_preview(draft, extraction: dict) -> str:
@@ -103,9 +134,10 @@ async def create_verified_schedule_draft(
     filename: str,
     prompt: str,
     date_range=None,
+    progress=None,
 ):
     extraction = await parse_schedule_document(
-        content, filename, prompt, valid_range=date_range
+        content, filename, prompt, valid_range=date_range, progress=progress
     )
     for slot in extraction["slots"]:
         slot["title"] = pipeline.anonymizer.clean_event_title(
@@ -115,7 +147,7 @@ async def create_verified_schedule_draft(
             pipeline.anonymizer.anonymize_text(slot.get("description", ""))
         )
     draft = await create_import_draft(
-        db_session, "telegram", user_id, extraction
+        db_session, "telegram", user_id, extraction, import_source_label(filename)
     )
     if date_range and getattr(draft, "status", "awaiting_range") == "awaiting_range":
         await set_draft_range(db_session, draft, *date_range)
@@ -198,6 +230,9 @@ async def send_card(message: Message, event: Event, db: AsyncSession, source: st
             "\n⚠️ У вас есть пересечение с мероприятием на весь день или дольше:\n"
             f"{overlap_rows}{suffix}\nНовое событие всё равно можно добавить.\n"
         )
+    schedule_text = await schedule_overlap_note(
+        db, "telegram", message.from_user.id, timing
+    )
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data=f"confirm:{event.id}")
     builder.button(text="❌ Отменить", callback_data=f"cancel:{event.id}")
@@ -216,6 +251,8 @@ async def send_card(message: Message, event: Event, db: AsyncSession, source: st
         f"🕒 {format_interval(timing)}\n"
         f"{('📍 ' + description + chr(10)) if description else ''}"
         f"{overlap_text}"
+        f"{html.escape(schedule_text)}"
+        f"{PAST_EVENT_TEXT if is_past(timing.end_at) else ''}"
         f"\n<b>Напоминания:</b>\n{reminders_text}\n\n"
         "Добавить мероприятие в календарь?"
     )
@@ -314,6 +351,9 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
         source = await pending_import_source(
             db_session, "telegram", message.from_user.id
         )
+        if source and supersedes_pending_import(message.text):
+            await discard_pending_imports(db_session, "telegram", message.from_user.id)
+            source = None
         if source:
             if re.search(r"\b(?:отмена|отменить)\s+(?:импорт|расписание)\b", message.text, re.I):
                 await finish_import_source(db_session, source, "cancelled")
@@ -332,20 +372,12 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
                 draft, extraction = await create_verified_schedule_draft(
                     db_session, message.from_user.id, source.content,
                     source.filename, combined_prompt, date_range,
+                    progress=schedule_progress_reporter(status),
+                )
+                await _send_schedule_draft(
+                    message, status, db_session, draft, extraction, "Файл"
                 )
                 await finish_import_source(db_session, source)
-                if getattr(draft, "status", "awaiting_range") == "awaiting_range":
-                    await finish_status(status, "✅ Файл прочитан. Нужен период для повторов.")
-                    await message.answer(
-                        "В файле нет точных дат для повторяющегося расписания. "
-                        "Теперь укажите период двумя датами, например: «с 1 сентября по 1 декабря»."
-                    )
-                else:
-                    await finish_status(status, "✅ Файл полностью обработан и проверен.")
-                    await message.answer(
-                        verified_preview(draft, extraction),
-                        reply_markup=import_keyboard(draft.id),
-                    )
             except ScheduleDocumentClarification as clarification:
                 await update_import_source_prompt(db_session, source, combined_prompt)
                 await finish_status(status, "🔎 Нужен один выбор из файла.")
@@ -354,7 +386,7 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
                 await db_session.rollback()
                 logger.error("Saved schedule source processing failed: %s", error, exc_info=True)
                 await finish_status(status, "❌ Импорт не прошёл проверку.")
-                await message.answer(f"❌ {error}")
+                await message.answer(f"❌ {public_error_text(error)}")
             return
         draft = await pending_draft(db_session, "telegram", message.from_user.id)
         if draft and draft.status == "awaiting_range":
@@ -374,7 +406,12 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
                 )
                 return
             await set_draft_range(db_session, draft, *date_range)
-            await message.answer(import_preview(draft), reply_markup=import_keyboard(draft.id))
+            await _send_schedule_draft(
+                message, None, db_session, draft, {"chunks_processed": 0}, "Расписание"
+            )
+            return
+        if is_bare_period(message.text):
+            await message.answer(BARE_PERIOD_TEXT)
             return
         if is_edit_request(message.text):
             status = await processing_status(message)
@@ -395,7 +432,7 @@ async def handle_text_input(message: Message, db_session: AsyncSession):
     except Exception as error:
         logger.error("Interval text pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать сообщение.")
-        await message.answer(f"❌ Не удалось разобрать мероприятие: {error}")
+        await message.answer(f"❌ Не удалось разобрать мероприятие. {public_error_text(error)}")
 
 
 @router.message(F.voice)
@@ -410,20 +447,31 @@ async def handle_voice_input(message: Message, db_session: AsyncSession):
             await handle_chat_edit(message, db_session, transcript)
             await finish_status(status, "✅ Изменение обработано.")
             return
+        if CANCEL_PREFIX_RE.match(transcript):
+            await finish_status(status, "✅ Голосовое сообщение обработано.")
+            await cancel_by_text(message, db_session, transcript)
+            return
         events = await pipeline.process_text_input(
             message.from_user.id, transcript, db_session
         )
         await finish_status(status, "✅ Голосовое сообщение обработано.")
+        if not events:
+            await message.answer(no_event_in_voice_text(html.escape(transcript)))
         for event in events:
             await send_card(message, event, db_session, "🎙 Распознано из голосового сообщения")
     except Exception as error:
         logger.error("Interval voice pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать голосовое сообщение.")
-        await message.answer(f"❌ Не удалось обработать голосовое сообщение: {error}")
+        await message.answer(f"❌ Не удалось обработать голосовое сообщение. {public_error_text(error)}")
 
 
 async def _send_schedule_draft(
-    message: Message, status: Message | None, draft, extraction: dict, subject: str
+    message: Message,
+    status: Message | None,
+    db_session: AsyncSession,
+    draft,
+    extraction: dict,
+    subject: str,
 ) -> None:
     if getattr(draft, "status", "awaiting_range") == "awaiting_range":
         await finish_status(status, "✅ Файл прочитан. Нужен период для повторов.")
@@ -432,17 +480,28 @@ async def _send_schedule_draft(
             "Укажите период двумя датами, например: «с 1 сентября по 1 декабря»."
         )
         return
+    state, created = await confirm_import(
+        db_session, "telegram", message.from_user.id, draft.id
+    )
+    if state == "imported":
+        await finish_status(status, "✅ Расписание уже находится в календаре.")
+        await message.answer(
+            "Это расписание уже было добавлено.",
+            reply_markup=imported_schedule_keyboard(draft.id),
+        )
+        return
+    if state != "created":
+        raise ValueError("Не удалось добавить проверенное расписание в календарь.")
     await finish_status(
         status,
-        "✅ {} обработан и проверен: частей {}.".format(
+        "✅ {} обработан: расписание добавлено (частей: {}).".format(
             subject, extraction.get("chunks_processed", 1)
         ),
     )
     await message.answer(
-        verified_preview(draft, extraction),
-        reply_markup=import_keyboard(draft.id),
+        import_summary(draft, created),
+        reply_markup=imported_schedule_keyboard(draft.id),
     )
-
 
 @router.message(F.photo)
 async def handle_photo_input(message: Message, db_session: AsyncSession):
@@ -463,16 +522,18 @@ async def handle_photo_input(message: Message, db_session: AsyncSession):
             draft, extraction = await create_verified_schedule_draft(
                 db_session, message.from_user.id, content,
                 "schedule.jpg", prompt, date_range,
+                progress=schedule_progress_reporter(status),
             )
-            await _send_schedule_draft(message, status, draft, extraction, "Изображение")
+            await _send_schedule_draft(message, status, db_session, draft, extraction, "Изображение")
             return
         weekly = await extract_weekly_schedule(content)
         if weekly:
             draft, extraction = await create_verified_schedule_draft(
                 db_session, message.from_user.id, content,
                 "schedule.jpg", "", None,
+                progress=schedule_progress_reporter(status),
             )
-            await _send_schedule_draft(message, status, draft, extraction, "Изображение")
+            await _send_schedule_draft(message, status, db_session, draft, extraction, "Изображение")
             return
         events = await pipeline.process_image_input(
             message.from_user.id, content, db_session
@@ -489,7 +550,7 @@ async def handle_photo_input(message: Message, db_session: AsyncSession):
     except Exception as error:
         logger.error("Interval image pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать изображение.")
-        await message.answer(f"❌ Не удалось распознать расписание: {error}")
+        await message.answer(f"❌ Не удалось распознать расписание. {public_error_text(error)}")
 
 
 @router.message(F.document)
@@ -514,9 +575,10 @@ async def handle_document_input(message: Message, db_session: AsyncSession):
             await message.answer(f"❌ Некорректный период: {error}")
             return
         draft, extraction = await create_verified_schedule_draft(
-            db_session, message.from_user.id, content, filename, prompt, date_range
+            db_session, message.from_user.id, content, filename, prompt, date_range,
+            progress=schedule_progress_reporter(status),
         )
-        await _send_schedule_draft(message, status, draft, extraction, "Файл")
+        await _send_schedule_draft(message, status, db_session, draft, extraction, "Файл")
     except ScheduleDocumentClarification as clarification:
         await save_import_source(
             db_session, "telegram", message.from_user.id, content, filename, prompt
@@ -527,7 +589,7 @@ async def handle_document_input(message: Message, db_session: AsyncSession):
         await db_session.rollback()
         logger.error("Document schedule pipeline failed: %s", error, exc_info=True)
         await finish_status(status, "❌ Не удалось обработать файл.")
-        await message.answer(f"❌ Не удалось разобрать файл: {error}")
+        await message.answer(f"❌ Не удалось разобрать файл. {public_error_text(error)}")
 
 
 @router.callback_query(F.data.startswith("schedule_confirm:"))
@@ -566,6 +628,57 @@ async def handle_schedule_cancel(callback: CallbackQuery, db_session: AsyncSessi
     await callback.answer("Импорт отменён" if cancelled else "Черновик уже закрыт")
     if cancelled and callback.message:
         await callback.message.edit_text("Импорт расписания отменён. Календарь не изменён.")
+
+
+@router.callback_query(F.data.startswith("schedule_undo:"))
+async def handle_schedule_undo(callback: CallbackQuery, db_session: AsyncSession):
+    try:
+        draft_id = int(callback.data.split(":", 1)[1])
+        state, removed = await undo_import(
+            db_session, "telegram", callback.from_user.id, draft_id
+        )
+        if state == "undone":
+            await callback.answer("Импорт отменён")
+            if callback.message:
+                await callback.message.edit_text(
+                    f"↩️ Импорт отменён: удалено {removed} элементов расписания.\n"
+                    "Остальные личные события и другие расписания не затронуты."
+                )
+            return
+        if state == "already_undone":
+            await callback.answer("Этот импорт уже отменён.")
+            return
+        await callback.answer("Импорт не найден или ещё не был добавлен.", show_alert=True)
+    except Exception as error:
+        await db_session.rollback()
+        logger.error("Schedule import undo failed: %s", error, exc_info=True)
+        await callback.answer("Не удалось отменить импорт.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("schedule_replace:"))
+async def handle_schedule_replace(callback: CallbackQuery, db_session: AsyncSession):
+    try:
+        draft_id = int(callback.data.split(":", 1)[1])
+        state, removed = await undo_import(
+            db_session, "telegram", callback.from_user.id, draft_id
+        )
+        if state == "undone":
+            await callback.answer("Старое расписание снято")
+            if callback.message:
+                await callback.message.edit_text(
+                    f"✏️ Удалено {removed} элементов этого импорта.\n\n"
+                    "Пришлите новый файл или фото расписания — его можно дополнить "
+                    "подписью с нужной группой или инструкцией."
+                )
+            return
+        if state == "already_undone":
+            await callback.answer("Старый импорт уже отменён.")
+            return
+        await callback.answer("Этот импорт нельзя заменить.", show_alert=True)
+    except Exception as error:
+        await db_session.rollback()
+        logger.error("Schedule import replacement failed: %s", error, exc_info=True)
+        await callback.answer("Не удалось подготовить замену расписания.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("skip_schedule:"))

@@ -1,0 +1,122 @@
+[
+ {
+  "name": "calendar",
+  "emoji": "📅"
+ },
+ {
+  "name": "bell",
+  "emoji": "🔔"
+ },
+ {
+  "name": "pin",
+  "emoji": "📌"
+ },
+ {
+  "name": "alarm",
+  "emoji": "⏰"
+ },
+ {
+  "name": "cross",
+  "emoji": "❌"
+ },
+ {
+  "name": "plus",
+  "emoji": "➕"
+ },
+ {
+  "name": "wave",
+  "emoji": "👋"
+ },
+ {
+  "name": "sunrise",
+  "emoji": "🌅"
+ },
+ {
+  "name": "info",
+  "emoji": "ℹ️"
+ },
+ {
+  "name": "chart",
+  "emoji": "📊"
+ },
+ {
+  "name": "book",
+  "emoji": "📖"
+ },
+ {
+  "name": "link",
+  "emoji": "🔗"
+ },
+ {
+  "name": "right",
+  "emoji": "➡️"
+ },
+ {
+  "name": "location",
+  "emoji": "📍"
+ },
+ {
+  "name": "undo",
+  "emoji": "↩️"
+ },
+ {
+  "name": "microphone",
+  "emoji": "🎙"
+ },
+ {
+  "name": "history",
+  "emoji": "📜"
+ },
+ {
+  "name": "clock",
+  "emoji": "⏰"
+ },
+ {
+  "name": "left",
+  "emoji": "⬅️"
+ },
+ {
+  "name": "calendar_sync",
+  "emoji": "📆"
+ },
+ {
+  "name": "trash",
+  "emoji": "🗑"
+ },
+ {
+  "name": "warning",
+  "emoji": "⚠️"
+ },
+ {
+  "name": "books",
+  "emoji": "📕"
+ },
+ {
+  "name": "refresh",
+  "emoji": "♻️"
+ },
+ {
+  "name": "card",
+  "emoji": "💳"
+ },
+ {
+  "name": "hourglass",
+  "emoji": "⏳"
+ },
+ {
+  "name": "pencil",
+  "emoji": "✏️"
+ },
+ {
+  "name": "search",
+  "emoji": "🔎"
+ },
+ {
+  "name": "check",
+  "emoji": "✅"
+ },
+ {
+  "name": "picture",
+  "emoji": "🖼"
+ }
+]

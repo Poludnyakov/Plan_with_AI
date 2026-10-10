@@ -19,6 +19,15 @@ from reminder_service import (
     snooze_delivery,
     update_reminder_preference,
 )
+from calendar_feed_service import connect_text, feed_links, feed_token
+from history_service import (
+    addition_history,
+    delete_history_item,
+    deletion_question,
+    find_history_item,
+    history_page,
+)
+from config import settings
 from unified_calendar import get_owned_entry
 
 
@@ -73,6 +82,115 @@ async def link_accounts(message: Message, db_session: AsyncSession):
     except ValueError as error:
         await db_session.rollback()
         await message.answer(f"❌ {error}")
+
+
+def calendar_feed_keyboard(links: dict[str, str]):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📆 Подключить календарь", url=links["connect"])
+    builder.button(text="📅 Google Календарь", url=links["google"])
+    builder.button(text="♻️ Новая ссылка", callback_data="calendar_feed:reset")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+async def send_calendar_feed(message: Message, db_session: AsyncSession, tg_id: int, reset: bool) -> None:
+    token = await feed_token(db_session, "telegram", tg_id, reset=reset)
+    links = feed_links(token, settings.APP_URL)
+    prefix = "♻️ Старая ссылка отключена.\n\n" if reset else ""
+    await message.answer(
+        prefix + connect_text(links), parse_mode=None,
+        reply_markup=calendar_feed_keyboard(links), disable_web_page_preview=True,
+    )
+
+
+@router.message(Command("calendars", "subscribe", "ics"))
+async def calendar_feed_command(message: Message, db_session: AsyncSession):
+    argument = ((message.text or "").split(maxsplit=1) + [""])[1].strip().casefold()
+    await send_calendar_feed(
+        message, db_session, message.from_user.id, reset=argument in {"new", "reset", "сброс", "новая"},
+    )
+
+
+@router.callback_query(F.data == "calendar_feed:reset")
+async def calendar_feed_reset(callback: CallbackQuery, db_session: AsyncSession):
+    await callback.answer("Старая ссылка отключена")
+    await send_calendar_feed(callback.message, db_session, callback.from_user.id, reset=True)
+
+
+def history_keyboard(page, offset: int, more: bool):
+    builder = InlineKeyboardBuilder()
+    sizes = []
+    deletable = [(number, item) for number, item in enumerate(page, offset + 1) if item.deletable]
+    for number, item in deletable:
+        builder.button(text=f"🗑 {number}", callback_data=f"hist:ask:{item.ref}")
+    sizes += [4] * (len(deletable) // 4) + ([len(deletable) % 4] if len(deletable) % 4 else [])
+    navigation = 0
+    if offset:
+        builder.button(text="⬅️ Новее", callback_data=f"hist:page:{max(0, offset - 8)}")
+        navigation += 1
+    if more:
+        builder.button(text="➡️ Ещё", callback_data=f"hist:page:{offset + 8}")
+        navigation += 1
+    if navigation:
+        sizes.append(navigation)
+    if sizes:
+        builder.adjust(*sizes)
+    return builder.as_markup()
+
+
+async def history_view(db_session: AsyncSession, tg_id: int, offset: int = 0):
+    items = await addition_history(db_session, "telegram", tg_id)
+    text, page, more = history_page(items, offset)
+    return text, history_keyboard(page, offset, more)
+
+
+@router.message(Command("history"))
+async def history_command(message: Message, db_session: AsyncSession):
+    text, markup = await history_view(db_session, message.from_user.id)
+    await message.answer(text, parse_mode=None, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("hist:"))
+async def history_callback(callback: CallbackQuery, db_session: AsyncSession):
+    _, action, ref = (callback.data.split(":", 2) + [""])[:3]
+    tg_id = callback.from_user.id
+    if action == "page":
+        text, markup = await history_view(db_session, tg_id, int(ref or 0))
+        await callback.answer()
+        await callback.message.edit_text(text, parse_mode=None, reply_markup=markup)
+        return
+    if action == "no":
+        text, markup = await history_view(db_session, tg_id)
+        await callback.answer("Ничего не удалено")
+        await callback.message.edit_text(text, parse_mode=None, reply_markup=markup)
+        return
+    if action == "ask":
+        item = await find_history_item(db_session, "telegram", tg_id, ref)
+        if not item or not item.deletable:
+            await callback.answer("Запись уже удалена.", show_alert=True)
+            return
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🗑 Да, удалить", callback_data=f"hist:del:{ref}")
+        builder.button(text="Отмена", callback_data="hist:no:")
+        builder.adjust(2)
+        await callback.answer()
+        await callback.message.edit_text(
+            deletion_question(item), parse_mode=None, reply_markup=builder.as_markup()
+        )
+        return
+    if action == "del":
+        try:
+            result = await delete_history_item(db_session, "telegram", tg_id, ref)
+        except Exception:
+            await db_session.rollback()
+            await callback.answer("Не удалось удалить. Попробуйте ещё раз.", show_alert=True)
+            return
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📜 К истории", callback_data="hist:page:0")
+        await callback.answer("Удалено")
+        await callback.message.edit_text(result, parse_mode=None, reply_markup=builder.as_markup())
+        return
+    await callback.answer()
 
 
 @router.message(Command("smart_reminders", "reminders"))

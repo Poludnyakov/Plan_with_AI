@@ -62,6 +62,8 @@ class ScheduleImportDraft(Base):
     status: Mapped[str] = mapped_column(String(24), default="awaiting_range", index=True, nullable=False)
     valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Shown in the history of additions: a file name or «Фото расписания».
+    source_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

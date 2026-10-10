@@ -7,30 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .api import callback_button
 from .handler import MaxUpdateHandler
 from .models import MaxReminder, MaxUser
-from .service import aware, format_interval
+from .service import aware
 from .state_models import MaxPendingAction
 
 
 class FullMaxUpdateHandler(MaxUpdateHandler):
     """Adds the multi-message reminder flow missing from the stateless API adapter."""
 
-    async def send_event_card(self, user_id, event, source="") -> None:
-        timing = event.timing
-        zone = ZoneInfo("Europe/Moscow")
-        reminders = "\n".join(
-            f"• {item.remind_at.astimezone(zone):%d.%m в %H:%M}"
-            for item in sorted(event.reminders, key=lambda value: value.remind_at)
-        ) or "• Нет будущих напоминаний"
-        text = (
-            (source + "\n" if source else "") + f"**{event.title}**\n"
-            f"🕒 {format_interval(timing.start_at, timing.end_at, zone.key)}\n"
-            + (f"📍 {event.description}\n" if event.description else "")
-            + f"\n**Напоминания:**\n{reminders}\n\nДобавить мероприятие в календарь?"
-        )
-        await self.client.send_message(text, user_id=user_id, buttons=[
-            [callback_button("✅ Подтвердить", f"confirm:{event.id}"), callback_button("❌ Отменить", f"cancel:{event.id}")],
+    def event_card_buttons(self, event) -> list[list[dict]]:
+        # The shared card (overlaps, schedule, dialogue memory) plus reminders.
+        return super().event_card_buttons(event) + [
             [callback_button("🔔 Добавить напоминание", f"reminder:{event.id}")],
-        ])
+        ]
 
     async def handle_message(self, message: dict, db: AsyncSession) -> None:
         user_id = self.sender_id(message)
@@ -66,7 +54,7 @@ class FullMaxUpdateHandler(MaxUpdateHandler):
             await db.commit()
             refreshed = await self.service.event_for_user(db, user_id, event.id)
             await self.client.send_message("✅ Напоминание добавлено.", user_id=user_id)
-            await self.send_event_card(user_id, refreshed)
+            await self.send_event_card(user_id, refreshed, db)
             return
         await super().handle_message(message, db)
 

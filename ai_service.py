@@ -5,7 +5,7 @@ import logging
 from typing import List, Union, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
+from openrouter_service import chat_completion
 from config import settings
 
 logger = logging.getLogger("AIService")
@@ -88,7 +88,7 @@ class EventListExtraction(BaseModel):
 # ==========================================
 # ASYNCHRONOUS AI EXTRACTION FUNCTION
 # ==========================================
-async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) -> List[dict]:
+async def extract_schedule_with_openrouter(text_or_image_prompt: Union[str, bytes]) -> List[dict]:
     """
     Asynchronously extracts student schedule events from a text prompt or an image
     using Yandex AI Studio models (YandexGPT 5.1 Pro for text, Qwen 3.6-35B for image schedules).
@@ -96,10 +96,8 @@ async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) 
     :param text_or_image_prompt: Raw text query, path to image file, base64 image string, or raw image bytes.
     :return: List of dictionaries conforming to the EventExtraction Pydantic model.
     """
-    if not settings.API_KEY:
-        raise ValueError("Yandex API_KEY is not configured in settings.")
-    if not settings.FOLDER_ID:
-        raise ValueError("Yandex FOLDER_ID is not configured in settings.")
+    if not settings.OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY is not configured in settings.")
 
     # Dynamic current date and day of week
     days_ru = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -137,25 +135,12 @@ async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) 
             is_image = True
             image_base64 = text_or_image_prompt
 
-    # Initialize OpenAI-compatible Async client for Yandex Cloud
-    client_base_url = "https://ai.api.cloud.yandex.net/v1" if is_image else settings.YANDEX_BASE_URL
-    client = AsyncOpenAI(
-        base_url=client_base_url,
-        api_key=settings.API_KEY,
-        default_headers={
-            "Authorization": f"Api-Key {settings.API_KEY}",
-            "x-folder-id": settings.FOLDER_ID
-        }
-    )
+    # Model identifiers are passed to OpenRouter unchanged.
 
     # Define model URIs as per Yandex Cloud convention
     if is_image:
         # Use user-specified Qwen model from Yandex AI Studio for image schedules
-        model_name = settings.YANDEX_CLOUD_MODEL
-        if not model_name.startswith("gpt://"):
-            model = f"gpt://{settings.FOLDER_ID}/{model_name}"
-        else:
-            model = model_name
+        model = settings.OPENROUTER_MODEL_FOR_OCR
         logger.info(f"Extracting schedule from image using Yandex AI Studio model: {model}")
         messages = [
             {
@@ -180,7 +165,7 @@ async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) 
         ]
     else:
         # Use YandexGPT 5.1 Pro for text
-        model = f"gpt://{settings.FOLDER_ID}/yandexgpt/latest"
+        model = settings.OPENROUTER_MODEL_FOR_TEXT
         logger.info(f"Extracting schedule from text using model: {model}")
         messages = [
             {
@@ -194,15 +179,10 @@ async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) 
         ]
 
     # Call completions API forcing structured JSON format output
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1
+    response = await chat_completion(
+            model=model, messages=messages, response_format={"type": "json_object"},
+            temperature=0.1,
         )
-    finally:
-        await client.close()
 
     response_text = response.choices[0].message.content
     logger.info(f"Received response from Yandex AI Studio: {response_text}")
@@ -231,10 +211,14 @@ async def extract_schedule_with_yandex(text_or_image_prompt: Union[str, bytes]) 
     return [event.model_dump() for event in validated_data.events]
 
 
+# Backwards-compatible import name for integrations that have not renamed it yet.
+extract_schedule_with_yandex = extract_schedule_with_openrouter
+
+
 class YandexGPTService:
     """
     YandexGPTService is a service layer wrapper for the OpenAI-compatible
     Yandex AI Studio completions structured output extractor.
     """
     async def extract_schedule(self, text_or_image_prompt: Union[str, bytes]) -> List[dict]:
-        return await extract_schedule_with_yandex(text_or_image_prompt)
+        return await extract_schedule_with_openrouter(text_or_image_prompt)

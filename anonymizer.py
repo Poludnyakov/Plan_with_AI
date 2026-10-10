@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+import pymorphy2
 from natasha import NamesExtractor, MorphVocab
 
 # Configure logging to console
@@ -59,6 +60,9 @@ class DataAnonymizer:
             r"(?:ов|ев|ёв|ин|ын|ский|цкий|ова|ева|ёва|ина|ына|ская|цкая|енко|ко|ук|юк)$",
             re.IGNORECASE,
         )
+        self.person_preposition_regex = re.compile(
+            r"(?:^|\s)(?:с|со|у|к|ко|для|от|про|о|об|и|,)\s*$", re.IGNORECASE
+        )
         self.name_context_regex = re.compile(
             r"(?:преподаватель|учитель|студент|ученик|профессор|доцент|имя|фамилия)\s+$",
             re.IGNORECASE,
@@ -103,13 +107,46 @@ class DataAnonymizer:
         if self._normal_form(word) in self.event_terms:
             return False
         if getattr(fact, "middle", None) or getattr(fact, "first", None):
-            return True
+            return self._is_personal_name(word, text[:match.start])
         if getattr(fact, "last", None):
             if self.surname_ending_regex.search(word):
                 return True
             context = text[max(0, match.start - 32):match.start]
             return bool(self.name_context_regex.search(context))
         return False
+
+    def _name_like(self, word: str) -> bool:
+        if re.fullmatch(r"[А-ЯЁA-Z]\.?", word):
+            return True  # an initial
+        parses = pymorphy2.MorphAnalyzer.parse(self.morph_vocab, word)
+        return any({"Name", "Surn", "Patr"} & parse.tag.grammemes for parse in parses)
+
+    def _name_span(self, match, text: str) -> tuple[int, int]:
+        """Trim words around the name: «Позвонить Ирине» masks only «Ирине»."""
+        words = list(re.finditer(r"[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z-]*\.?", text[match.start:match.stop]))
+        named = [word for word in words if self._name_like(word.group(0).rstrip("."))]
+        if not named:
+            return match.start, match.stop
+        start = match.start + named[0].start()
+        stop = match.start + named[-1].end()
+        if named[-1] is words[-1]:
+            stop = match.stop
+        return start, stop
+
+    def _is_personal_name(self, word: str, before: str) -> bool:
+        """A lone capitalised word is a first name only if the dictionary says so.
+
+        Natasha also tags «Олимпиада», «Вебинар» or «Хакатон» at the start of a
+        title as first names. A dictionary name that is mainly a common noun
+        («Вера», «Роман») counts only after a preposition, as in «с Верой».
+        """
+        parses = pymorphy2.MorphAnalyzer.parse(self.morph_vocab, word)
+        names = [parse for parse in parses if {"Name", "Surn", "Patr"} & parse.tag.grammemes]
+        if not names or not pymorphy2.MorphAnalyzer.word_is_known(self.morph_vocab, word):
+            return False
+        if parses[0] in names:
+            return True
+        return bool(self.person_preposition_regex.search(before))
 
     def clean_display_text(self, text: str, fallback: str = "") -> str:
         """Remove internal PII markers and prepositions left around them."""
@@ -135,11 +172,12 @@ class DataAnonymizer:
             value = self.name_marker_regex.sub(" ", value)
 
         value = self.name_marker_regex.sub(" ", value)
+        value = re.sub(r"\(\s*\)|\[\s*\]", " ", value)
         value = re.sub(r"\s+", " ", value)
         value = re.sub(r"\s+([,.:;!?])", r"\1", value)
         value = re.sub(r"^[\s,.:;!?—-]+|[\s,.:;!?—-]+$", "", value)
         value = re.sub(
-            r"^(?:по|про|о|об|с|со|к|ко|у|от|для|на|в|во)\s+",
+            r"^(?:по|про|о|об|с|со|к|ко|у|от|для|на|в|во|и)\s+",
             "",
             value,
             flags=re.IGNORECASE,
@@ -157,6 +195,9 @@ class DataAnonymizer:
         value = self.clean_display_text(text)
         if had_marker and re.fullmatch(r"[А-Яа-яЁё-]+", value):
             value = self._normal_form(value)
+        if value[:1].islower() and re.match(r"[а-яё]", value):
+            # «Обед с Сашей» → «обед»: the title still starts like a title.
+            value = value[0].upper() + value[1:]
         return (value or "Событие")[:255]
 
     def anonymize_text(self, text: str) -> str:
@@ -204,10 +245,9 @@ class DataAnonymizer:
                 matches_list.sort(key=lambda m: m.start, reverse=True)
                 
                 for match in matches_list:
+                    start, stop = self._name_span(match, anonymized_text)
                     anonymized_text = (
-                        anonymized_text[:match.start] + 
-                        "[ФИО]" + 
-                        anonymized_text[match.stop:]
+                        anonymized_text[:start] + "[ФИО]" + anonymized_text[stop:]
                     )
             else:
                 logger.info("Phase 2: Natasha detected no name entities in the text.")

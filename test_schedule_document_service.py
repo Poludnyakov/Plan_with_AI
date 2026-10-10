@@ -1,4 +1,6 @@
 import io
+import re
+import zipfile
 from datetime import date
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +20,8 @@ from schedule_document_service import (
     _table_selection_candidates,
     _verify_source_support,
     _verify_weekday_coverage,
+    _calendar_row_dates,
+    calendar_evidence_chunks,
     _clean_json,
     _validated_slots,
     document_chunks,
@@ -64,6 +68,40 @@ async def test_xlsx_extraction_expands_merged_headers_for_llm_context():
     assert "Понедельник\t09:00\tМатематика" in text
 
 
+@pytest.mark.anyio
+async def test_xlsx_without_dimension_metadata_is_read_safely():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Дата", "Событие"])
+    sheet.append(["03.09.2026", "Математика"])
+    source = io.BytesIO()
+    workbook.save(source)
+
+    stripped = io.BytesIO()
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(stripped, "w") as result:
+        for info in archive.infolist():
+            payload = archive.read(info.filename)
+            if info.filename == "xl/worksheets/sheet1.xml":
+                payload = re.sub(br"<dimension[^>]*/>", b"", payload)
+            result.writestr(info, payload)
+
+    text = await extract_document_text(stripped.getvalue(), "without-dimension.xlsx")
+
+    assert "03.09.2026\tМатематика" in text
+
+
+def test_calendar_grid_never_changes_literal_dates_by_guessing():
+    dates = _calendar_row_dates([
+        "2027-01-04", "2027-01-05", "2027-01-06", "2027-01-07",
+        "2027-01-08", "2026-01-09", "2026-01-10",
+    ])
+
+    assert [item.isoformat() for item in dates] == [
+        "2027-01-04", "2027-01-05", "2027-01-06", "2027-01-07",
+        "2027-01-08", "2026-01-09", "2026-01-10",
+    ]
+
+
 def test_document_response_normalizes_wrappers_and_underscored_nested_keys():
     payload = _clean_json(
         '{"_embedded":{"_slots":[{"_title":"Смена","_weekday":null,'
@@ -96,6 +134,21 @@ def test_large_table_chunks_repeat_column_context():
     assert all("Сотрудник\tДата\tВремя" in chunk for chunk in chunks[1:])
 
 
+def test_calendar_evidence_chunks_drop_duplicate_raw_table_and_lose_no_rows():
+    evidence = [
+        f"КАЛЕНДАРНАЯ_ДАТА 2026-09-{day:02d} | ЯЧЕЙКА C{day} | Урок {day} 09:00-10:00"
+        for day in range(1, 11)
+    ]
+    source = "=== ЛИСТ: большой лист ===\nR1\tочень большая сырая таблица\n" + "\n".join(evidence)
+
+    with patch("schedule_document_service.CALENDAR_CHUNK_CHARS", 180):
+        chunks = calendar_evidence_chunks(source)
+
+    assert len(chunks) > 1
+    assert all("сырая таблица" not in chunk for chunk in chunks)
+    assert [line for chunk in chunks for line in chunk.splitlines()] == evidence
+
+
 @pytest.mark.anyio
 async def test_document_parser_processes_all_chunks_and_keeps_exact_and_recurring_rows():
     answers = [
@@ -110,16 +163,14 @@ async def test_document_parser_processes_all_chunks_and_keeps_exact_and_recurrin
             "week_pattern": "every", "confidence": 0.91,
         }],
     ]
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_READER_MODEL", "strong/latest"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_NORMALIZER_MODEL", "lite/latest"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
+         patch("schedule_document_service.settings.OPENROUTER_MODEL_FOR_FILES", "strong/latest"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="Четверг Смена 09:00 18:00\nПятница Тренировка 19:00 20:00"), \
          patch("schedule_document_service.document_chunks", return_value=["part one", "part two"]), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, side_effect=answers) as parse, \
          patch("schedule_document_service._normalize_candidates", new_callable=AsyncMock, side_effect=lambda rows, *_: rows) as normalize:
         result = await parse_schedule_document(
-            b"content", "schedule.xlsx", "выбери Анну с 1 сентября по 1 декабря"
+            b"content", "schedule.csv", "выбери Анну с 1 сентября по 1 декабря"
         )
 
     assert parse.await_count == 2
@@ -131,16 +182,32 @@ async def test_document_parser_processes_all_chunks_and_keeps_exact_and_recurrin
 
 
 @pytest.mark.anyio
+async def test_document_parser_retries_one_invalid_model_fragment():
+    rows = [{
+        "title": "Смена", "weekday": 3, "occurrence_date": "2026-09-03",
+        "start_time": "09:00", "end_time": "18:00", "description": "",
+        "week_pattern": "every", "confidence": 0.96,
+    }]
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
+         patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="03.09.2026 Смена 09:00 18:00"), \
+         patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, side_effect=[ValueError("bad json"), rows]) as parse:
+        result = await parse_schedule_document(b"table", "schedule.pdf", "")
+
+    assert parse.await_count == 2
+    assert "ПОВТОРНАЯ ПРОВЕРКА" in parse.await_args_list[1].args[1]
+    assert result["slots"][0]["title"] == "Смена"
+
+
+@pytest.mark.anyio
 async def test_image_uses_strong_multimodal_reader_before_ocr():
     rows = [{
         "title": "Тренировка", "weekday": 4, "occurrence_date": None,
         "start_time": "19:00", "end_time": "20:00", "description": "",
         "week_pattern": "every", "confidence": 0.95,
     }]
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_READER_MODEL", "strong/latest"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_NORMALIZER_MODEL", "lite/latest"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
+         patch("schedule_document_service.settings.OPENROUTER_MODEL_FOR_FILES", "strong/latest"), \
+         patch("schedule_document_service.settings.OPENROUTER_MODEL_FOR_OCR", "vision/latest"), \
          patch("schedule_document_service._parse_image_direct", new_callable=AsyncMock, return_value=rows) as image_reader, \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="Пятница Тренировка 19:00 20:00") as extract_text, \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=rows), \
@@ -150,17 +217,15 @@ async def test_image_uses_strong_multimodal_reader_before_ocr():
         )
 
     image_reader.assert_awaited_once()
-    assert image_reader.await_args.args[3] == "strong/latest"
+    assert image_reader.await_args.args[3] == "vision/latest"
     extract_text.assert_not_awaited()
     assert result["slots"][0]["title"] == "Тренировка"
 
 
 @pytest.mark.anyio
 async def test_empty_strong_reader_is_not_reinterpreted_by_lite_model():
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_READER_MODEL", "strong/latest"), \
-         patch("schedule_document_service.settings.YANDEX_DOCUMENT_NORMALIZER_MODEL", "lite/latest"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
+         patch("schedule_document_service.settings.OPENROUTER_MODEL_FOR_FILES", "strong/latest"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="Вторник Дежурство 08:00 12:00"), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=[]) as parse, \
          patch("schedule_document_service._normalize_candidates", new_callable=AsyncMock, side_effect=lambda values, *_: values):
@@ -180,8 +245,7 @@ async def test_parser_without_prompt_accepts_exact_dates():
         "start_time": "09:00", "end_time": "10:30", "description": "",
         "week_pattern": "every", "confidence": 0.96,
     }]
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value="04.09.2026 Математика 09:00 10:30"), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=rows) as parse:
         result = await parse_schedule_document(b"table", "schedule.csv", "")
@@ -261,12 +325,11 @@ async def test_unambiguous_group_projection_uses_strong_reader():
         {"title": "Физика", "weekday": 1, "start_time": "10:00", "end_time": "11:30"},
         {"title": "История", "weekday": 2, "start_time": "11:00", "end_time": "12:30"},
     ]
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=rows) as parse:
         result = await parse_schedule_document(
-            b"xls", "schedule.xls",
+            b"csv", "schedule.csv",
             "группа ПИ-241 с 1 сентября по 1 декабря",
         )
 
@@ -357,12 +420,11 @@ async def test_multigroup_source_asks_after_strong_reader_detects_ambiguity():
         clarification="Нужно выбрать одну группу: ПИ-241 или ПИ-242.",
         choices=["ПИ-241", "ПИ-242"],
     )
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock, return_value=result) as parse:
         with pytest.raises(ScheduleDocumentClarification, match="выбрать одну группу") as error:
-            await parse_schedule_document(b"xls", "schedule.xls", "")
+            await parse_schedule_document(b"csv", "schedule.csv", "")
 
     parse.assert_awaited_once()
     assert error.value.choices == ["ПИ-241", "ПИ-242"]
@@ -371,8 +433,7 @@ async def test_multigroup_source_asks_after_strong_reader_detects_ambiguity():
 @pytest.mark.anyio
 async def test_reader_budget_stops_unknown_large_source_before_partial_import():
     source = "Понедельник Раздел 09:00 10:00"
-    with patch("schedule_document_service.settings.API_KEY", "key"), \
-         patch("schedule_document_service.settings.FOLDER_ID", "folder"), \
+    with patch("schedule_document_service.settings.OPENROUTER_API_KEY", "key"), \
          patch("schedule_document_service.extract_document_text", new_callable=AsyncMock, return_value=source), \
          patch("schedule_document_service.document_chunks", return_value=["part"] * 5), \
          patch("schedule_document_service._parse_chunk", new_callable=AsyncMock) as parse:

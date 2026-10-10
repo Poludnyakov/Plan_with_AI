@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -14,6 +15,9 @@ from schedule_models import (
 )
 
 
+logger = logging.getLogger("ScheduleService")
+
+
 ACTIVE_DRAFT_STATUSES = {"awaiting_range", "ready"}
 ACTIVE_SOURCE_STATUSES = {"awaiting_input", "processing"}
 WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
@@ -25,17 +29,97 @@ MONTHS = {
     "сентября": 9, "сентябрь": 9, "октября": 10, "октябрь": 10,
     "ноября": 11, "ноябрь": 11, "декабря": 12, "декабрь": 12,
 }
+# «КМБО-03-19» and «БИ-26-1» are group codes, not the dates 03-19 and 26-1.
 DATE_TOKEN_RE = re.compile(
-    r"(?<!\d)(\d{1,2})(?:[./-](\d{1,2})(?:[./-](\d{2,4}))?"
-    r"|\s+(" + "|".join(MONTHS) + r")(?:\s+(\d{4}))?)(?!\d)",
+    r"(?<![\w-])(?<![\w]-)(\d{1,2})(?:[./-](\d{1,2})(?:[./-](\d{2,4}))?"
+    r"|\s+(" + "|".join(MONTHS) + r")(?:\s+(\d{4}))?)(?![\d])(?!-\w)",
     re.IGNORECASE,
 )
+
+
+# «кр. 1 н.» — every week except the first; «1,5,9,13 н.», «2-16 н.» — only
+# those weeks of the semester. Written before a class title in many timetables.
+WEEK_MARK_RE = re.compile(
+    r"^\s*\(?\s*(кр\.?\s*)?((?:\d{1,2}\s*[-–,]\s*)*\d{1,2})\s*(?:нед|н)\.?(?![а-яё])\s*\)?\s*[,;:—-]?\s*",
+    re.IGNORECASE,
+)
+
+
+# The same mark written after the title: «Программирование (кр. 1 н.)».
+WEEK_MARK_TAIL_RE = re.compile(
+    r"\s*[(\[,;—-]?\s*(кр\.?\s*)?((?:\d{1,2}\s*[-–,]\s*)*\d{1,2})\s*(?:нед|н)\.?(?![а-яё])\s*[)\]]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _week_numbers(text: str) -> list[int]:
+    weeks: set[int] = set()
+    for part in re.split(r"\s*,\s*", text):
+        bounds = [int(value) for value in re.split(r"\s*[-–]\s*", part) if value]
+        if len(bounds) == 2 and bounds[0] <= bounds[1]:
+            weeks.update(range(bounds[0], bounds[1] + 1))
+        else:
+            weeks.update(bounds)
+    return sorted(week for week in weeks if 1 <= week <= 30)
+
+
+def split_week_marks(slot: dict) -> dict:
+    """Move a week mark from the title into `weeks` or `except_weeks`."""
+    raw = slot.get("title") or ""
+    match = WEEK_MARK_RE.match(raw)
+    title = raw[match.end():].strip() if match else ""
+    if not match:
+        match = WEEK_MARK_TAIL_RE.search(raw)
+        title = raw[:match.start()].strip() if match else ""
+    if not match or not title:
+        return slot
+    slot = {**slot, "title": title[:1].upper() + title[1:]}
+    weeks = _week_numbers(match[2])
+    if weeks and not slot.get("occurrence_date"):
+        slot["except_weeks" if match[1] else "weeks"] = weeks
+    return slot
+
+
+def week_marks_label(slot: dict) -> str:
+    if slot.get("except_weeks"):
+        return " · кроме нед. " + ", ".join(map(str, slot["except_weeks"]))
+    if slot.get("weeks"):
+        return " · нед. " + ", ".join(map(str, slot["weeks"]))
+    return ""
+
+
+def semester_start(valid_from: date) -> date:
+    """Week 1 of a timetable: 1 September for an autumn term, else its first day.
+
+    Universities number weeks (I/II, числитель/знаменатель) from the start of
+    the semester, not by the calendar week of the year.
+    """
+    if valid_from.month >= 9 or valid_from.month == 1:
+        start = date(valid_from.year - (valid_from.month == 1), 9, 1)
+    else:
+        start = valid_from
+    if start.weekday() == 6:  # 1 September on a Sunday: classes start on Monday
+        start += timedelta(days=1)
+    return start
+
+
+def academic_week(valid_from: date, day: date) -> int:
+    start = semester_start(valid_from)
+    return (day - (start - timedelta(days=start.weekday()))).days // 7 + 1
+
+
+def _date_matches(text: str) -> list[re.Match]:
+    """Date tokens; «1-2» or «3-4» without a year are class numbers, not dates."""
+    return [
+        match for match in DATE_TOKEN_RE.finditer(text)
+        if not (match.group(2) and not match.group(3) and "-" in match.group(0))
+    ]
 
 
 def parse_date_range(text: str, today: date | None = None) -> tuple[date, date] | None:
     """Parse two Russian/numeric dates without involving the LLM."""
     today = today or datetime.now(ZoneInfo("Europe/Moscow")).date()
-    matches = list(DATE_TOKEN_RE.finditer((text or "").casefold().replace("ё", "е")))
+    matches = _date_matches((text or "").casefold().replace("ё", "е"))
     if len(matches) < 2:
         return None
 
@@ -50,16 +134,18 @@ def parse_date_range(text: str, today: date | None = None) -> tuple[date, date] 
 
     start_day, start_month, start_year = parts(matches[0])
     end_day, end_month, end_year = parts(matches[1])
-    if start_year is None:
-        start_year = today.year
-        candidate = date(start_year, start_month, start_day)
-        if candidate < today - timedelta(days=31):
-            start_year += 1
-    start = date(start_year, start_month, start_day)
-    end_year = end_year or start.year
-    end = date(end_year, end_month, end_day)
-    if end < start and matches[1].group(3) is None and matches[1].group(5) is None:
+    years_given = start_year is not None or end_year is not None
+    try:
+        start = date(start_year or today.year, start_month, start_day)
+        end = date(end_year or start.year, end_month, end_day)
+    except ValueError:
+        return None  # «31.02» or a number that is not a date
+    if end < start and end_year is None:
         end = date(end.year + 1, end.month, end.day)
+    if not years_given and end < today:
+        # A period that has fully passed this year means the next one; a
+        # current semester («с 1 сентября по 31 декабря» in October) stays.
+        start, end = date(start.year + 1, start.month, start.day), date(end.year + 1, end.month, end.day)
     if end < start:
         raise ValueError("Конец периода должен быть не раньше начала.")
     if end - start > timedelta(days=370):
@@ -76,7 +162,7 @@ def parse_occurrence_date(text: str, today: date | None = None) -> date | None:
         return today + timedelta(days=1)
     if re.search(r"\bсегодня\b", normalized):
         return today
-    match = DATE_TOKEN_RE.search(normalized)
+    match = next(iter(_date_matches(normalized)), None)
     if not match:
         return None
     day = int(match.group(1))
@@ -85,10 +171,58 @@ def parse_occurrence_date(text: str, today: date | None = None) -> date | None:
     year = int(raw_year) if raw_year else today.year
     if year < 100:
         year += 2000
-    result = date(year, month, day)
-    if raw_year is None and result < today - timedelta(days=1):
-        result = date(year + 1, month, day)
+    try:
+        result = date(year, month, day)
+        if raw_year is None and result < today - timedelta(days=1):
+            result = date(year + 1, month, day)
+    except ValueError:
+        return None
     return result
+
+
+TIME_ONLY_RE = re.compile(
+    r"\b(?:в|к|с)\s+(?:[01]?\d|2[0-3])(?:[:.]\d{2})?\b", re.IGNORECASE
+)
+IMPORT_SELECTION_RE = re.compile(
+    r"\b(?:группа|раздел|поток|курс|факультет)\b|\b[а-яё]{2,}-\d{2,4}\b",
+    re.IGNORECASE,
+)
+
+
+BARE_PERIOD_TEXT = (
+    "Это похоже на период для расписания, но файла или фото в ожидании нет. "
+    "Пришлите расписание ещё раз и укажите период в подписи или следующим "
+    "сообщением. Если это событие, добавьте его название, например: "
+    "«отпуск с 1 по 7 ноября»."
+)
+
+
+def is_bare_period(text: str) -> bool:
+    """Only two dates, as answered to the import question: not an event."""
+    value = (text or "").casefold().replace("ё", "е")
+    try:
+        if parse_date_range(value) is None:
+            return False
+    except ValueError:
+        return False
+    rest = DATE_TOKEN_RE.sub(" ", value)
+    words = re.findall(r"[а-яa-z]+", rest)
+    filler = {"с", "по", "до", "от", "и", "период", "учебный", "семестр", "года", "год", "г"}
+    return all(word in filler for word in words)
+
+
+def supersedes_pending_import(text: str) -> bool:
+    """Whether text is a new calendar request, not an import-file answer.
+
+    A two-date period is a common answer to an import question and must be
+    preserved. A single date such as "завтра" is a new event in normal chat.
+    """
+    value = (text or "").strip()
+    if not value or parse_date_range(value) is not None:
+        return False
+    if parse_occurrence_date(value) is not None:
+        return True
+    return bool(TIME_ONLY_RE.search(value)) and not bool(IMPORT_SELECTION_RE.search(value))
 
 
 async def pending_draft(
@@ -170,8 +304,49 @@ async def finish_import_source(
     await db.commit()
 
 
+async def discard_pending_imports(
+    db: AsyncSession, platform: str, external_id: int
+) -> tuple[int, int]:
+    """Cancel an unfinished import and erase its retained source file."""
+    account_id = await account_id_for(db, platform, external_id)
+    sources = (await db.execute(
+        select(ScheduleImportSource).filter(
+            ScheduleImportSource.account_id == account_id,
+            ScheduleImportSource.status.in_(ACTIVE_SOURCE_STATUSES),
+        )
+    )).scalars().all()
+    drafts = (await db.execute(
+        select(ScheduleImportDraft).filter(
+            ScheduleImportDraft.account_id == account_id,
+            ScheduleImportDraft.status.in_(ACTIVE_DRAFT_STATUSES),
+        )
+    )).scalars().all()
+    for source in sources:
+        source.status = "cancelled"
+        source.content = b""
+        source.prompt = ""
+    for draft in drafts:
+        draft.status = "cancelled"
+        draft.slots = []
+    if sources or drafts:
+        await db.commit()
+    return len(sources), len(drafts)
+
+
+IMAGE_SOURCE_RE = re.compile(r"\.(?:jpe?g|png|webp|heic|gif|bmp)$", re.IGNORECASE)
+
+
+def import_source_label(filename: str | None) -> str:
+    """How an import is named in the history: the file or «Фото расписания»."""
+    name = (filename or "").strip()
+    if not name or IMAGE_SOURCE_RE.search(name):
+        return "Фото расписания"
+    return name[:255]
+
+
 async def create_import_draft(
-    db: AsyncSession, platform: str, external_id: int, extraction: dict
+    db: AsyncSession, platform: str, external_id: int, extraction: dict,
+    source_name: str | None = None,
 ) -> ScheduleImportDraft:
     account_id = await account_id_for(db, platform, external_id)
     old = (await db.execute(
@@ -182,7 +357,7 @@ async def create_import_draft(
     )).scalars().all()
     for item in old:
         item.status = "superseded"
-    slots = list(extraction["slots"])
+    slots = [split_week_marks(slot) for slot in extraction["slots"]]
     exact_dates = [
         date.fromisoformat(slot["occurrence_date"])
         for slot in slots if slot.get("occurrence_date")
@@ -196,6 +371,7 @@ async def create_import_draft(
         status="ready" if all_rows_are_exact else "awaiting_range",
         valid_from=min(exact_dates) if all_rows_are_exact else None,
         valid_until=max(exact_dates) if all_rows_are_exact else None,
+        source_name=source_name,
     )
     db.add(draft)
     await db.commit()
@@ -232,11 +408,47 @@ def import_preview(draft: ScheduleImportDraft, limit: int = 12) -> str:
         )
         lines.append(
             f"• {day_label} {slot['start_time']}–{slot['end_time']} "
-            f"{slot['title']}{parity if not occurrence_date else ''}"
+            f"{slot['title']}{parity + week_marks_label(slot) if not occurrence_date else ''}"
         )
     if len(draft.slots) > limit:
         lines.append(f"…и ещё {len(draft.slots) - limit}")
     lines.extend(["", "Добавить это расписание фоновым слоем календаря?"])
+    return "\n".join(lines)
+
+
+def import_summary(draft: ScheduleImportDraft, created: int, limit: int = 12) -> str:
+    """A compact receipt for an import that was already committed."""
+    exact_dates = bool(draft.slots) and all(
+        slot.get("occurrence_date") for slot in draft.slots
+    )
+    span = (
+        f"Даты: {draft.valid_from:%d.%m.%Y}–{draft.valid_until:%d.%m.%Y}"
+        if exact_dates else f"Период: {draft.valid_from:%d.%m.%Y}–{draft.valid_until:%d.%m.%Y}"
+    )
+    lines = [
+        "✅ Расписание добавлено в календарь.",
+        f"Создано элементов: {created} из {len(draft.slots)} распознанных.",
+        span,
+        "",
+        "Внесено:",
+    ]
+    for slot in draft.slots[:limit]:
+        occurrence_date = slot.get("occurrence_date")
+        day_label = (
+            date.fromisoformat(occurrence_date).strftime("%d.%m.%Y")
+            if occurrence_date else WEEKDAYS[int(slot["weekday"])]
+        )
+        lines.append(
+            f"• {day_label} {slot["start_time"]}–{slot["end_time"]} {slot["title"]}"
+            + ("" if occurrence_date else week_marks_label(slot))
+        )
+    if len(draft.slots) > limit:
+        lines.append(f"…и ещё {len(draft.slots) - limit}")
+    lines.extend([
+        "",
+        "Можно отменить только этот импорт или заменить расписание новым файлом. "
+        "Позже это можно сделать в /history.",
+    ])
     return "\n".join(lines)
 
 
@@ -273,6 +485,7 @@ async def confirm_import(
         signature = (
             slot["title"], int(slot["weekday"]), start_clock, end_clock,
             slot.get("week_pattern", "every"), valid_from, valid_until,
+            tuple(slot.get("weeks") or ()), tuple(slot.get("except_weeks") or ()),
         )
         if signature in seen:
             continue
@@ -289,7 +502,7 @@ async def confirm_import(
         )
         if (await db.execute(select(ScheduleSeries.id).filter(*filters))).scalar_one_or_none():
             continue
-        db.add(ScheduleSeries(
+        series = ScheduleSeries(
             account_id=account_id,
             title=slot["title"][:255],
             description=(slot.get("description") or "")[:1000],
@@ -299,8 +512,16 @@ async def confirm_import(
             valid_from=valid_from,
             valid_until=valid_until,
             week_pattern=slot.get("week_pattern", "every"),
-            source="schedule_import",
-        ))
+            source=f"schedule_import:{draft.id}",
+        )
+        db.add(series)
+        skipped = _weeks_outside_marks(series, slot)
+        if skipped:
+            await db.flush()
+            db.add_all(
+                ScheduleException(series_id=series.id, occurrence_date=day, status="skipped")
+                for day in skipped
+            )
         created += 1
     draft.status = "imported"
     await db.commit()
@@ -319,11 +540,59 @@ async def cancel_import(
     return True
 
 
+async def undo_import(
+    db: AsyncSession, platform: str, external_id: int, draft_id: int
+) -> tuple[str, int]:
+    """Remove only rows created by one completed import, never older schedules."""
+    account_id = await account_id_for(db, platform, external_id)
+    result = await db.execute(
+        select(ScheduleImportDraft)
+        .filter(
+            ScheduleImportDraft.id == draft_id,
+            ScheduleImportDraft.account_id == account_id,
+        )
+        .with_for_update()
+    )
+    draft = result.scalar_one_or_none()
+    if not draft:
+        return "missing", 0
+    if draft.status == "undone":
+        return "already_undone", 0
+    if draft.status != "imported":
+        return "not_imported", 0
+    rows = (await db.execute(
+        select(ScheduleSeries).filter(
+            ScheduleSeries.account_id == account_id,
+            ScheduleSeries.source == f"schedule_import:{draft.id}",
+        )
+    )).scalars().all()
+    for series in rows:
+        await db.delete(series)
+    draft.status = "undone"
+    await db.commit()
+    return "undone", len(rows)
+
+
 def _matches_week(series: ScheduleSeries, occurrence: date) -> bool:
     if series.week_pattern == "every":
         return True
-    parity = occurrence.isocalendar().week % 2
+    parity = academic_week(series.valid_from, occurrence) % 2
     return parity == (1 if series.week_pattern == "odd" else 0)
+
+
+def _weeks_outside_marks(series: ScheduleSeries, slot: dict) -> list[date]:
+    """Dates a «кр. 1 н.» or «1,5,9 н.» class does not take place."""
+    weeks, excluded = set(slot.get("weeks") or ()), set(slot.get("except_weeks") or ())
+    if not weeks and not excluded:
+        return []
+    skipped = []
+    current = series.valid_from + timedelta(days=(series.weekday - series.valid_from.weekday()) % 7)
+    while current <= series.valid_until:
+        week = academic_week(series.valid_from, current)
+        if _matches_week(series, current) and (week in excluded or (weeks and week not in weeks)):
+            skipped.append(current)
+        current += timedelta(days=7)
+    return skipped
 
 
 async def list_schedule_occurrences(
@@ -379,6 +648,50 @@ async def list_schedule_occurrences(
                 })
             current += timedelta(days=7)
     return sorted(payloads, key=lambda item: item["start"])
+
+
+async def schedule_overlaps(
+    db: AsyncSession, platform: str, external_id: int, start_at: datetime, end_at: datetime
+) -> list[dict]:
+    """Classes of imported timetables that run during a personal event."""
+    zone = ZoneInfo("Europe/Moscow")
+    items = await list_schedule_occurrences(
+        db, platform, external_id,
+        start_at.astimezone(zone).date(), end_at.astimezone(zone).date(),
+    )
+    return [
+        item for item in items
+        if datetime.fromisoformat(item["start"]) < end_at
+        and datetime.fromisoformat(item["end"]) > start_at
+    ]
+
+
+async def schedule_overlap_note(db: AsyncSession, platform: str, external_id: int, timing) -> str:
+    """Card text about classes during a timed event; never fails the card."""
+    if bool(getattr(timing, "all_day", False)):
+        return ""
+    try:
+        start, end = timing.start_at, timing.end_at
+        if start.tzinfo is None:
+            start, end = start.replace(tzinfo=timezone.utc), end.replace(tzinfo=timezone.utc)
+        return schedule_overlap_text(await schedule_overlaps(db, platform, external_id, start, end))
+    except Exception as error:
+        logger.warning("Schedule overlap check failed: %s", error)
+        return ""
+
+
+def schedule_overlap_text(items: list[dict]) -> str:
+    """A non-blocking note: classes are a background layer and can be skipped."""
+    if not items:
+        return ""
+    rows = "\n".join(
+        f"• {item['start_local']}–{item['end_local']} {item['title']}" for item in items[:3]
+    )
+    more = "\n• …" if len(items) > 3 else ""
+    return (
+        f"\n📚 В это время по расписанию:\n{rows}{more}\n"
+        "Событие всё равно можно добавить.\n"
+    )
 
 
 async def skip_candidates(

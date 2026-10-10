@@ -11,6 +11,7 @@ from account_service import consume_link_code, create_link_code
 from database import Base
 from interval_models import EventTiming
 from max_bot.models import MaxEvent, MaxEventTiming, MaxReminder, MaxUser
+from max_bot.scheduler import send_daily_summaries as send_max_daily_summaries
 from max_bot.scheduler import send_due_reminders as send_max_reminders
 from models import Event, EventStatus, Reminder, ReminderStatus, User
 from reminder_models import ReminderDeliveryState
@@ -91,19 +92,57 @@ async def test_default_reminder_policy_does_not_call_paid_ai(reminder_db):
 
 
 
+def moscow_midnight(days_ahead: int) -> datetime:
+    zone = ZoneInfo("Europe/Moscow")
+    day = datetime.now(zone).date() + timedelta(days=days_ahead)
+    return datetime(day.year, day.month, day.day, tzinfo=zone)
+
+
 @pytest.mark.anyio
-async def test_all_day_default_reminder_is_one_day_before(reminder_db):
-    start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=4)
+async def test_all_day_default_reminder_is_the_evening_before(reminder_db):
+    start = moscow_midnight(4)
     values = await build_user_reminders(
         reminder_db, "telegram", 313, "Собрать чемоданы", "",
         start, start + timedelta(days=1), "Europe/Moscow", all_day=True,
     )
-    assert values == [start - timedelta(days=1)]
+    # Not at midnight: 19:00 the day before.
+    assert values == [start - timedelta(hours=5)]
+
+
+def test_all_day_reminder_for_tomorrow_after_19_is_the_morning_of_the_day():
+    from reminder_service import all_day_reminder
+
+    start = moscow_midnight(1)
+    late_evening = start - timedelta(hours=3)  # 21:00 today
+    assert all_day_reminder(start, start + timedelta(days=1), "Europe/Moscow", late_evening) == [
+        start + timedelta(hours=9)
+    ]
+
+
+@pytest.mark.anyio
+async def test_all_day_event_with_a_morning_reminder_can_be_saved():
+    """Created after 19:00 for tomorrow: the 09:00 reminder is within the day."""
+    from unified_calendar import create_linked_event
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    start = moscow_midnight(1)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+        db.add(User(tg_id=4242, timezone="Europe/Moscow"))
+        await db.commit()
+        with patch("unified_calendar._sync"):
+            entry = await create_linked_event(
+                db, "telegram", 4242, "Выходной", "", start, start + timedelta(days=1),
+                [start + timedelta(hours=9)], True,
+            )
+        assert entry.timing.all_day
+    await engine.dispose()
 
 
 @pytest.mark.anyio
 async def test_all_day_ai_keeps_day_before_and_adds_ai_suggestion(reminder_db):
-    start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=5)
+    start = moscow_midnight(5)
     preference = await reminder_preference(reminder_db, "telegram", 314)
     preference.use_ai = True
     await reminder_db.commit()
@@ -114,7 +153,7 @@ async def test_all_day_ai_keeps_day_before_and_adds_ai_suggestion(reminder_db):
             start, start + timedelta(days=1), "Europe/Moscow", all_day=True,
         )
     paid.assert_awaited_once()
-    assert values == [start - timedelta(days=1), ai_suggestion]
+    assert values == [start - timedelta(hours=5), ai_suggestion]
 
 @pytest.mark.anyio
 async def test_telegram_waits_for_reaction_and_ack_collapses_overdue_queue(reminder_db):
@@ -243,4 +282,46 @@ async def test_daily_summary_is_sent_once_with_calendar_button(reminder_db):
     assert bot.send_message.await_count == 1
     assert "План на сегодня" in bot.send_message.await_args.kwargs["text"]
     keyboard = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
-    assert keyboard[0][0].text == "📅 Открыть календарь"
+    buttons = [button for row in keyboard for button in row]
+    calendar = next(button for button in buttons if button.text == "📅 Открыть календарь")
+    # The Mini App, not the site in a browser.
+    assert calendar.web_app and calendar.web_app.url.endswith("/miniapp?destination=calendar") and not calendar.url
+    assert any(button.callback_data == "summary_switch:week" for button in buttons)
+
+
+@pytest.mark.anyio
+async def test_daily_summary_reaches_next_user_after_a_failed_send(reminder_db):
+    # A failed send rolls the session back, which expires loaded ORM objects;
+    # the next user must not trigger a lazy reload (MissingGreenlet).
+    for tg_id in (801, 802):
+        reminder_db.add(User(tg_id=tg_id, timezone="Europe/Moscow"))
+    await reminder_db.flush()
+    for tg_id in (801, 802):
+        preference = await reminder_preference(reminder_db, "telegram", tg_id)
+        preference.summary_hour = 0
+        preference.notification_platform = "telegram"
+    await reminder_db.commit()
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=[RuntimeError("blocked"), None])
+
+    await send_daily_summaries(bot, SessionFactory(reminder_db))
+
+    assert [call.kwargs["chat_id"] for call in bot.send_message.await_args_list] == [801, 802]
+
+
+@pytest.mark.anyio
+async def test_max_daily_summary_reaches_next_user_after_a_failed_send(reminder_db):
+    for max_user_id in (901, 902):
+        reminder_db.add(MaxUser(max_user_id=max_user_id, timezone="Europe/Moscow"))
+    await reminder_db.flush()
+    for max_user_id in (901, 902):
+        preference = await reminder_preference(reminder_db, "max", max_user_id)
+        preference.summary_hour = 0
+        preference.notification_platform = "max"
+    await reminder_db.commit()
+    client = MagicMock()
+    client.send_message = AsyncMock(side_effect=[RuntimeError("blocked"), None])
+
+    await send_max_daily_summaries(client, SessionFactory(reminder_db))
+
+    assert [call.kwargs["user_id"] for call in client.send_message.await_args_list] == [901, 902]
